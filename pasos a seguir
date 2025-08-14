@@ -1,109 +1,222 @@
-1. Preparación y Diseño
+FASE 1: Preparación y Diseño de Arquitectura
 
-Objetivo: Tener la arquitectura y el entorno listos.
-Acciones:
+🎯 Objetivo: Tener la base conceptual, técnica y el entorno listos.
 
-Definir casos de uso prioritarios (qué hará primero el asistente).
+Tareas paso a paso:
 
-Dibujar diagrama de arquitectura modular (módulos visión, voz, calendario, motor IA, interfaz).
+Definir casos de uso prioritarios:
 
-Seleccionar lenguajes y frameworks:
+Ej: “Detectar texto en pantalla y sugerir evento en calendario” → prioridad alta.
 
-Backend: Python (FastAPI o Flask).
+Ej: “Transcribir voz a texto para notas rápidas” → prioridad media.
 
-Frontend: React o Vue.js.
+Dibujar arquitectura modular (listo en el diagrama que te hice).
 
-Base de datos: PostgreSQL o MongoDB.
+Elegir tecnologías:
 
-Configurar repositorio Git y pipeline CI/CD (GitHub Actions, GitLab CI).
+Backend: Python 3.11 + FastAPI (rápido para APIs REST).
 
-2. Desarrollo de Módulo de Visión por Computadora
+Frontend: React + Vite (rendimiento y modularidad).
 
-Objetivo: Escanear y entender contenido de pantalla.
-Acciones:
+Base de datos: PostgreSQL (eventos y configuraciones) + Redis (caché y colas de tareas).
 
-Implementar captura de pantalla (Python + PyAutoGUI o mss).
+Configurar entorno de desarrollo:
 
-Integrar OCR:
+Instalar Python y Node.js.
 
-Opción local: Tesseract.
+Crear entorno virtual (venv o conda).
 
-Opción nube: Google Vision API.
+Repositorio Git + ramas (main, dev, feature/*).
 
-Procesar texto con NLP (spaCy o transformers) para entender contexto.
+Pipeline de CI/CD:
 
-3. Desarrollo de Módulo de Reconocimiento de Voz (ASR)
+GitHub Actions con jobs: test, build, deploy.
 
-Objetivo: Escuchar, transcribir y entender voz.
-Acciones:
+✅ Criterio de éxito: Diagrama aprobado, repositorio inicial creado y entorno de desarrollo funcional.
 
-Captura de audio con PyAudio o Sounddevice.
+FASE 2: Módulo de Visión por Computadora
+
+🎯 Objetivo: Detectar y procesar contenido de pantalla.
+
+Tareas paso a paso:
+
+Captura de pantalla en tiempo real:
+
+Usar mss o PyAutoGUI.
+
+Optimizar para capturas rápidas (<500ms).
+
+OCR (Reconocimiento Óptico de Caracteres):
+
+Local: Tesseract + pytesseract.
+
+Nube: Google Vision API (más preciso, pero dependes de Internet).
+
+Procesamiento de texto:
+
+Limpieza: eliminar saltos de línea y caracteres raros.
+
+NLP: spaCy o transformers para extraer entidades (fechas, nombres, lugares).
+
+Prueba de rendimiento:
+
+Medir latencia (objetivo <1s entre captura y texto extraído).
+
+✅ Criterio de éxito: Sistema detecta texto en pantalla con >90% precisión y entrega resultados en <1s.
+
+FASE 3: Módulo de Reconocimiento de Voz (ASR)
+
+🎯 Objetivo: Escuchar, transcribir y entender voz.
+
+Tareas paso a paso:
+
+Captura de audio:
+
+PyAudio o Sounddevice.
+
+Configurar micrófono por defecto.
 
 Transcripción:
 
-Local: Vosk.
+Local: Vosk (offline, rápido).
 
-Nube: Google Speech-to-Text.
+Nube: Google Speech-to-Text (mayor precisión).
 
-Preprocesamiento de texto (normalización, eliminación de ruido).
+Preprocesamiento:
 
-4. Gestión de Calendario y Recordatorios
+Normalizar texto (minúsculas, quitar ruido).
 
-Objetivo: Crear, modificar y eliminar eventos.
-Acciones:
+Integración con NLP:
 
-Integrar APIs:
+Detección de comandos (ej: “crear reunión mañana”).
 
-Google Calendar API.
+Pruebas de latencia:
 
-Microsoft Graph API (para Outlook).
+Objetivo: <1 segundo desde que se deja de hablar hasta recibir texto.
 
-Crear CRUD para eventos.
+✅ Criterio de éxito: Conversión de voz a texto con >85% de precisión y latencia <1s.
 
-Sistema de recordatorios con alertas (cron jobs o sched).
+FASE 4: Gestión de Calendario y Recordatorios
 
-5. Motor de IA Proactiva
+🎯 Objetivo: Administrar eventos y notificaciones.
 
-Objetivo: Que el asistente sugiera y actúe sin ser pedido.
-Acciones:
+Tareas paso a paso:
 
-Implementar lógica basada en contexto (ej. si detecta reunión en OCR, sugerir crear evento).
+Integrar APIs de calendario:
 
-Modelos de IA simples para recomendaciones (scikit-learn o transformers).
+Google Calendar API (OAuth 2.0).
 
-6. Interfaz de Usuario y Panel de Control
+Microsoft Graph API.
 
-Objetivo: Que el usuario interactúe visualmente con el asistente.
-Acciones:
+CRUD de eventos:
 
-Diseñar panel con dashboard.
+Crear, leer, actualizar, eliminar eventos.
 
-Mostrar capturas, transcripciones y eventos.
+Recordatorios programados:
 
-Configuración de notificaciones y permisos.
+Usar APScheduler o Celery con Redis.
 
-7. Seguridad
+Enviar alertas por correo, notificación o mensaje.
 
-Objetivo: Cumplir GDPR y proteger datos.
-Acciones:
+Pruebas de integración:
+
+Crear evento desde texto detectado por OCR o voz.
+
+✅ Criterio de éxito: Crear y recibir notificaciones de eventos desde cualquier módulo.
+
+FASE 5: Motor de IA Proactiva
+
+🎯 Objetivo: Que el asistente actúe sin órdenes explícitas.
+
+Tareas paso a paso:
+
+Definir reglas iniciales:
+
+Ej: Si detecta fecha en OCR → sugerir evento.
+
+Ej: Si voz dice “reunión” + hora → crear evento.
+
+Integrar modelos de IA:
+
+Modelos simples de clasificación con scikit-learn.
+
+O usar un LLM local (ej: GPT-4 mini) para entender contexto.
+
+Conexión con otros módulos:
+
+Motor recibe datos de visión y voz.
+
+Toma decisiones y llama API de calendario o interfaz.
+
+✅ Criterio de éxito: El sistema sugiere y ejecuta acciones relevantes al contexto sin orden directa.
+
+FASE 6: Interfaz de Usuario
+
+🎯 Objetivo: Dar control total al usuario.
+
+Tareas paso a paso:
+
+Diseño de UI:
+
+Dashboard con panel de OCR, voz, calendario y configuración.
+
+Implementación:
+
+React + TailwindCSS.
+
+Llamadas a API del backend con Axios.
+
+Funciones clave:
+
+Vista de eventos.
+
+Configuración de recordatorios.
+
+Historial de comandos ejecutados.
+
+✅ Criterio de éxito: Interfaz fluida, accesible y en tiempo real.
+
+FASE 7: Seguridad y Cumplimiento
+
+🎯 Objetivo: Proteger datos y cumplir GDPR.
+
+Tareas paso a paso:
 
 Cifrado AES-256 para datos en reposo.
 
-TLS para datos en tránsito.
+TLS para datos en tránsito (https).
 
 Autenticación multifactor (MFA).
 
-Roles y permisos por usuario.
+Roles y permisos para usuarios.
 
-8. Pruebas y Despliegue
+Logs de auditoría.
 
-Objetivo: Garantizar estabilidad y rendimiento.
-Acciones:
+✅ Criterio de éxito: Auditoría externa confirma medidas de seguridad y privacidad.
 
-Pruebas unitarias y de integración.
+FASE 8: Pruebas y Despliegue
 
-Medir latencia (objetivo <1s para voz).
+🎯 Objetivo: Garantizar rendimiento y disponibilidad.
 
-Despliegue en nube (AWS, Azure o GCP).
+Tareas paso a paso:
 
-Configurar monitoreo y logging.
+Pruebas unitarias (pytest).
+
+Pruebas de integración entre módulos.
+
+Optimización de rendimiento.
+
+Despliegue:
+
+Contenedores Docker.
+
+Servidores en AWS/GCP/Azure.
+
+Monitoreo:
+
+Prometheus + Grafana.
+
+Alertas en caso de fallo.
+
+✅ Criterio de éxito: Uptime 99.9% y rendimiento estable.
+
