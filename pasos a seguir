@@ -1,0 +1,109 @@
+1. Preparación y Diseño
+
+Objetivo: Tener la arquitectura y el entorno listos.
+Acciones:
+
+Definir casos de uso prioritarios (qué hará primero el asistente).
+
+Dibujar diagrama de arquitectura modular (módulos visión, voz, calendario, motor IA, interfaz).
+
+Seleccionar lenguajes y frameworks:
+
+Backend: Python (FastAPI o Flask).
+
+Frontend: React o Vue.js.
+
+Base de datos: PostgreSQL o MongoDB.
+
+Configurar repositorio Git y pipeline CI/CD (GitHub Actions, GitLab CI).
+
+2. Desarrollo de Módulo de Visión por Computadora
+
+Objetivo: Escanear y entender contenido de pantalla.
+Acciones:
+
+Implementar captura de pantalla (Python + PyAutoGUI o mss).
+
+Integrar OCR:
+
+Opción local: Tesseract.
+
+Opción nube: Google Vision API.
+
+Procesar texto con NLP (spaCy o transformers) para entender contexto.
+
+3. Desarrollo de Módulo de Reconocimiento de Voz (ASR)
+
+Objetivo: Escuchar, transcribir y entender voz.
+Acciones:
+
+Captura de audio con PyAudio o Sounddevice.
+
+Transcripción:
+
+Local: Vosk.
+
+Nube: Google Speech-to-Text.
+
+Preprocesamiento de texto (normalización, eliminación de ruido).
+
+4. Gestión de Calendario y Recordatorios
+
+Objetivo: Crear, modificar y eliminar eventos.
+Acciones:
+
+Integrar APIs:
+
+Google Calendar API.
+
+Microsoft Graph API (para Outlook).
+
+Crear CRUD para eventos.
+
+Sistema de recordatorios con alertas (cron jobs o sched).
+
+5. Motor de IA Proactiva
+
+Objetivo: Que el asistente sugiera y actúe sin ser pedido.
+Acciones:
+
+Implementar lógica basada en contexto (ej. si detecta reunión en OCR, sugerir crear evento).
+
+Modelos de IA simples para recomendaciones (scikit-learn o transformers).
+
+6. Interfaz de Usuario y Panel de Control
+
+Objetivo: Que el usuario interactúe visualmente con el asistente.
+Acciones:
+
+Diseñar panel con dashboard.
+
+Mostrar capturas, transcripciones y eventos.
+
+Configuración de notificaciones y permisos.
+
+7. Seguridad
+
+Objetivo: Cumplir GDPR y proteger datos.
+Acciones:
+
+Cifrado AES-256 para datos en reposo.
+
+TLS para datos en tránsito.
+
+Autenticación multifactor (MFA).
+
+Roles y permisos por usuario.
+
+8. Pruebas y Despliegue
+
+Objetivo: Garantizar estabilidad y rendimiento.
+Acciones:
+
+Pruebas unitarias y de integración.
+
+Medir latencia (objetivo <1s para voz).
+
+Despliegue en nube (AWS, Azure o GCP).
+
+Configurar monitoreo y logging.
