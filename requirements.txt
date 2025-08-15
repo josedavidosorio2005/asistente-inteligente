@@ -1,0 +1,10 @@
+mss
+numpy
+opencv-python
+requests
+speechrecognition
+gtts
+playsound
+pyttsx3
+watchdog
+pyaudio
