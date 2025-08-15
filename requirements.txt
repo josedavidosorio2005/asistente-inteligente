@@ -7,4 +7,7 @@ gtts
 playsound
 pyttsx3
 watchdog
+pyttsx3
+watchdog
 pyaudio
+openai
