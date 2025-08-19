@@ -35,3 +35,5 @@ def analizar_pantalla():
         playsound(tmp_mp3)
     except Exception as e:
         print(f"[ERROR] No se pudo analizar la pantalla: {e}")
+
+
