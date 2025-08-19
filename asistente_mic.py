@@ -52,6 +52,115 @@ class MicrofonoWidget(QWidget):
 
 
 class AsistenteMain(QMainWindow):
+    def sincronizar_con_drive(self, modo='ambos'):
+        """
+        Sincroniza notas con Google Drive.
+        modo: 'subir', 'descargar' o 'ambos'
+        """
+        import pickle, os, io
+        from googleapiclient.discovery import build
+        from google_auth_oauthlib.flow import InstalledAppFlow
+        from google.auth.transport.requests import Request
+        from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
+        SCOPES = ['https://www.googleapis.com/auth/drive.file']
+        creds = None
+        if os.path.exists('token.pickle'):
+            with open('token.pickle', 'rb') as token:
+                creds = pickle.load(token)
+        if not creds or not creds.valid:
+            if creds and creds.expired and creds.refresh_token:
+                creds.refresh(Request())
+            else:
+                flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
+                creds = flow.run_local_server(port=0)
+            with open('token.pickle', 'wb') as token:
+                pickle.dump(creds, token)
+        service = build('drive', 'v3', credentials=creds)
+        base = self.ruta_notas()
+        # SUBIR
+        if modo in ('subir', 'ambos'):
+            subidos = 0
+            for root, dirs, files in os.walk(base):
+                for file in files:
+                    if file.endswith('.txt'):
+                        file_path = os.path.join(root, file)
+                        # Evitar duplicados: buscar si ya existe en Drive
+                        query = f"name='{file}' and mimeType='text/plain'"
+                        res = service.files().list(q=query, fields="files(id)").execute()
+                        if res.get('files'):
+                            continue  # Ya existe
+                        metadata = {'name': file, 'parents': []}
+                        try:
+                            media = MediaFileUpload(file_path, mimetype='text/plain')
+                            service.files().create(body=metadata, media_body=media, fields='id').execute()
+                            subidos += 1
+                        except Exception as e:
+                            print(f"Error subiendo {file}: {e}")
+            self.mostrar_mensaje_chat(f"Notas subidas a Drive: {subidos}", tipo='sistema')
+        # DESCARGAR
+        if modo in ('descargar', 'ambos'):
+            descargados = 0
+            results = service.files().list(q="mimeType='text/plain'", fields="files(id, name)").execute()
+            items = results.get('files', [])
+            for item in items:
+                file_id = item['id']
+                file_name = item['name']
+                local_path = os.path.join(base, file_name)
+                if os.path.exists(local_path):
+                    continue  # Ya existe local
+                try:
+                    request = service.files().get_media(fileId=file_id)
+                    fh = io.FileIO(local_path, 'wb')
+                    downloader = MediaIoBaseDownload(fh, request)
+                    done = False
+                    while not done:
+                        status, done = downloader.next_chunk()
+                    descargados += 1
+                except Exception as e:
+                    print(f"Error descargando {file_name}: {e}")
+            self.mostrar_mensaje_chat(f"Notas descargadas de Drive: {descargados}", tipo='sistema')
+    def ruta_notas(self, carpeta=None):
+        base = os.path.join(os.path.dirname(__file__), 'notas')
+        if carpeta:
+            return os.path.join(base, carpeta)
+        return base
+
+    def guardar_nota(self, titulo, contenido, carpeta=None):
+        ruta = self.ruta_notas(carpeta)
+        os.makedirs(ruta, exist_ok=True)
+        with open(os.path.join(ruta, f"{titulo}.txt"), "w", encoding="utf-8") as f:
+            f.write(contenido)
+
+    def leer_nota(self, titulo, carpeta=None):
+        ruta = self.ruta_notas(carpeta)
+        try:
+            with open(os.path.join(ruta, f"{titulo}.txt"), "r", encoding="utf-8") as f:
+                return f.read()
+        except Exception:
+            return None
+
+    def eliminar_nota(self, titulo, carpeta=None):
+        ruta = self.ruta_notas(carpeta)
+        try:
+            os.remove(os.path.join(ruta, f"{titulo}.txt"))
+            return True
+        except Exception:
+            return False
+
+    def buscar_notas(self, palabra, carpeta=None):
+        ruta = self.ruta_notas(carpeta)
+        resultados = []
+        if not os.path.exists(ruta):
+            return resultados
+        for root, dirs, files in os.walk(ruta):
+            for file in files:
+                if file.endswith('.txt'):
+                    path = os.path.join(root, file)
+                    with open(path, 'r', encoding='utf-8') as f:
+                        contenido = f.read()
+                        if palabra.lower() in contenido.lower() or palabra.lower() in file.lower():
+                            resultados.append((file[:-4], os.path.relpath(root, ruta)))
+        return resultados
     def iniciar_escucha_hey_asistente(self):
         import speech_recognition as sr
         import threading
@@ -115,6 +224,17 @@ class AsistenteMain(QMainWindow):
         # Saludo
         if any(s in texto_l for s in ["hola", "buenos días", "buenas tardes", "buenas noches"]):
             respuesta = "¡Hola! ¿En qué puedo ayudarte?"
+        # Sincronizar notas con Google Drive (subir y descargar)
+        elif ("sincroniza" in texto_l or "sube" in texto_l) and "drive" in texto_l:
+            self.mostrar_mensaje_chat("Subiendo notas a Google Drive...", tipo='sistema')
+            self.sincronizar_con_drive(modo='subir')
+            respuesta = "Notas subidas a Drive."
+            accion_realizada = True
+        elif "descarga" in texto_l and "drive" in texto_l:
+            self.mostrar_mensaje_chat("Descargando notas de Google Drive...", tipo='sistema')
+            self.sincronizar_con_drive(modo='descargar')
+            respuesta = "Notas descargadas de Drive."
+            accion_realizada = True
         # Abrir aplicación o navegador
         elif "abrir" in texto_l:
             import subprocess
@@ -176,29 +296,70 @@ class AsistenteMain(QMainWindow):
         # Quién eres
         elif "quién eres" in texto_l or "quien eres" in texto_l or "tu nombre" in texto_l:
             respuesta = "Soy tu asistente inteligente, siempre listo para ayudarte."
-        # Guardar nota
-        elif "guardar nota" in texto_l or "anota" in texto_l or "escribe" in texto_l:
-            nota = texto_l.replace("guardar nota","").replace("anota","").replace("escribe","").strip()
-            if not nota:
-                respuesta = "¿Qué nota quieres guardar?"
+        # Crear nota en carpeta
+        elif "crear nota" in texto_l:
+            import re
+            m = re.search(r"crear nota (.+?)( en (.+))?$", texto_l)
+            if m:
+                titulo = m.group(1).strip()
+                carpeta = m.group(3).strip() if m.group(3) else None
+                self.guardar_nota(titulo, "", carpeta)
+                respuesta = f"Nota '{titulo}' creada{' en '+carpeta if carpeta else ''}. ¿Qué contenido quieres guardar?"
             else:
-                try:
-                    with open("nota_asistente.txt", "a", encoding="utf-8") as f:
-                        f.write(nota+"\n")
-                    respuesta = f"Nota guardada: {nota}"
-                except Exception:
-                    respuesta = "No pude guardar la nota."
-        # Consultar nota
-        elif "leer nota" in texto_l or "mostrar nota" in texto_l:
-            try:
-                with open("nota_asistente.txt", "r", encoding="utf-8") as f:
-                    notas = f.read().strip()
-                if notas:
-                    respuesta = "Tus notas:\n" + notas
+                respuesta = "¿Cómo se llama la nota?"
+        # Editar nota
+        elif "editar nota" in texto_l:
+            import re
+            m = re.search(r"editar nota (.+?)( en (.+))?$", texto_l)
+            if m:
+                titulo = m.group(1).strip()
+                carpeta = m.group(3).strip() if m.group(3) else None
+                contenido = self.leer_nota(titulo, carpeta)
+                if contenido is not None:
+                    respuesta = f"¿Qué nuevo contenido quieres para la nota '{titulo}'?"
+                    # Aquí podrías guardar el nuevo contenido en la siguiente interacción
                 else:
-                    respuesta = "No tienes notas guardadas."
-            except Exception:
-                respuesta = "No pude leer las notas."
+                    respuesta = f"No encontré la nota '{titulo}'."
+            else:
+                respuesta = "¿Qué nota quieres editar?"
+        # Eliminar nota
+        elif "eliminar nota" in texto_l:
+            import re
+            m = re.search(r"eliminar nota (.+?)( en (.+))?$", texto_l)
+            if m:
+                titulo = m.group(1).strip()
+                carpeta = m.group(3).strip() if m.group(3) else None
+                ok = self.eliminar_nota(titulo, carpeta)
+                if ok:
+                    respuesta = f"Nota '{titulo}' eliminada."
+                else:
+                    respuesta = f"No encontré la nota '{titulo}'."
+            else:
+                respuesta = "¿Qué nota quieres eliminar?"
+        # Buscar nota
+        elif "buscar nota" in texto_l:
+            import re
+            m = re.search(r"buscar nota (.+?)( en (.+))?$", texto_l)
+            if m:
+                palabra = m.group(1).strip()
+                carpeta = m.group(3).strip() if m.group(3) else None
+                resultados = self.buscar_notas(palabra, carpeta)
+                if resultados:
+                    respuesta = "Notas encontradas: " + ", ".join([f"'{t}' (carpeta: {c})" for t,c in resultados])
+                else:
+                    respuesta = "No se encontraron notas con ese término."
+            else:
+                respuesta = "¿Qué palabra quieres buscar en las notas?"
+        # Crear carpeta
+        elif "crear carpeta" in texto_l:
+            import re
+            m = re.search(r"crear carpeta (.+)$", texto_l)
+            if m:
+                carpeta = m.group(1).strip()
+                os.makedirs(self.ruta_notas(carpeta), exist_ok=True)
+                respuesta = f"Carpeta '{carpeta}' creada."
+            else:
+                respuesta = "¿Cómo se llama la carpeta?"
         # Fallback
         else:
             respuesta = 'Comando recibido: ' + texto
