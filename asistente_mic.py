@@ -52,6 +52,75 @@ class MicrofonoWidget(QWidget):
 
 
 class AsistenteMain(QMainWindow):
+    mensaje_signal = pyqtSignal(str, str)
+    escuchar_signal = pyqtSignal(int)  # para relanzar escucha (delay ms)
+    actualizar_notas_signal = pyqtSignal()  # refrescar lista de notas
+    def crear_nota_desde_gui(self):
+        from PyQt5.QtWidgets import QInputDialog
+        titulo, ok = QInputDialog.getText(self, "Crear nota", "Título de la nota:")
+        if ok and titulo:
+            contenido, ok2 = QInputDialog.getMultiLineText(self, "Contenido de la nota", f"Contenido para '{titulo}':")
+            if ok2:
+                self.guardar_nota(titulo, contenido)
+                self.cargar_lista_notas()
+                self.mostrar_mensaje_chat(f"✅ Nota '{titulo}' guardada desde la interfaz.", tipo='sistema')
+
+    def editar_nota_desde_gui(self):
+        from PyQt5.QtWidgets import QInputDialog
+        item = self.notes_list.currentItem()
+        if not item:
+            self.mostrar_mensaje_chat("Selecciona una nota para editar.", tipo='sistema')
+            return
+        nombre = item.text().split(' / ')[0]
+        contenido = self.leer_nota(nombre)
+        nuevo, ok = QInputDialog.getMultiLineText(self, "Editar nota", f"Nuevo contenido para '{nombre}':", contenido or "")
+        if ok:
+            self.guardar_nota(nombre, nuevo)
+            self.cargar_lista_notas()
+            self.mostrar_mensaje_chat(f"✅ Nota '{nombre}' actualizada desde la interfaz.", tipo='sistema')
+
+    def eliminar_nota_desde_gui(self):
+        item = self.notes_list.currentItem()
+        if not item:
+            self.mostrar_mensaje_chat("Selecciona una nota para eliminar.", tipo='sistema')
+            return
+        nombre = item.text().split(' / ')[0]
+        ok = self.eliminar_nota(nombre)
+        if ok:
+            self.cargar_lista_notas()
+            self.mostrar_mensaje_chat(f"✅ Nota '{nombre}' eliminada desde la interfaz.", tipo='sistema')
+        else:
+            self.mostrar_mensaje_chat(f"No se pudo eliminar la nota '{nombre}'.", tipo='sistema')
+    def cargar_lista_notas(self):
+        # Carga la lista de notas en la GUI
+        self.notes_list.clear()
+        base = self.ruta_notas()
+        for root, dirs, files in os.walk(base):
+            for file in files:
+                if file.endswith('.txt'):
+                    nombre = file[:-4]
+                    carpeta = os.path.relpath(root, base)
+                    if carpeta == '.': carpeta = ''
+                    item = f"{nombre}{' / '+carpeta if carpeta else ''}"
+                    self.notes_list.addItem(item)
+
+    def feedback_nota_guardada(self, titulo, accion='guardada'):
+        # Mensaje destacado en el chat
+        self.mostrar_mensaje_chat(f"✅ Nota '{titulo}' {accion} correctamente.", tipo='sistema')
+        # Sonido de confirmación (puedes cambiar el archivo por uno propio)
+        try:
+            import playsound
+            import os
+            confirm_path = os.path.join(os.path.dirname(__file__), 'confirm.mp3')
+            if os.path.exists(confirm_path):
+                playsound.playsound(confirm_path, False)
+        except Exception:
+            pass
+    def ensure_notas_dir(self):
+        base = os.path.join(os.path.dirname(__file__), 'notas')
+        os.makedirs(base, exist_ok=True)
+
+    # constructor inicial movido más abajo y consolidado
     def sincronizar_con_drive(self, modo='ambos'):
         """
         Sincroniza notas con Google Drive.
@@ -185,12 +254,29 @@ class AsistenteMain(QMainWindow):
         threading.Thread(target=escuchar, daemon=True).start()
 
     def mostrar_mensaje_chat(self, texto, tipo='usuario'):
-        # Busca el chat_layout y añade un QLabel con el texto
+        # Emite una señal para que la interfaz añada el mensaje en el hilo principal
+        try:
+            self.mensaje_signal.emit(texto, tipo)
+        except Exception:
+            # si falla la señal (por ejemplo, antes de init), intentar añadir directamente
+            for child in self.findChildren(QWidget):
+                if hasattr(child, 'layout') and child.layout() and child.layout().count() > 0:
+                    lay = child.layout()
+                    if lay.count() > 0 and isinstance(lay.itemAt(0).widget(), QLabel):
+                        msg = QLabel(texto)
+                        if tipo == 'usuario':
+                            msg.setStyleSheet("background:rgba(0,0,0,0.18);border-radius:12px;padding:10px 16px;font-size:16px;color:#fff;")
+                        else:
+                            msg.setStyleSheet("background:rgba(0,255,255,0.10);border-radius:12px;padding:10px 16px;font-size:16px;color:#0ff;")
+                        lay.addWidget(msg)
+                        break
+
+    def _append_mensaje(self, texto, tipo='usuario'):
+        # Slot que corre en el hilo principal para añadir el QLabel al layout del chat
         for child in self.findChildren(QWidget):
             if hasattr(child, 'layout') and child.layout() and child.layout().count() > 0:
                 lay = child.layout()
                 if lay.count() > 0 and isinstance(lay.itemAt(0).widget(), QLabel):
-                    # Es el chat_layout
                     msg = QLabel(texto)
                     if tipo == 'usuario':
                         msg.setStyleSheet("background:rgba(0,0,0,0.18);border-radius:12px;padding:10px 16px;font-size:16px;color:#fff;")
@@ -203,17 +289,38 @@ class AsistenteMain(QMainWindow):
         import speech_recognition as sr
         import threading
         def reconocer():
+            # Pausar wake-word mientras escuchamos comando principal
+            self.escuchando = False
             r = sr.Recognizer()
             mic = sr.Microphone()
             with mic as source:
                 self.mostrar_mensaje_chat('Habla ahora...', tipo='sistema')
-                audio = r.listen(source, timeout=5, phrase_time_limit=7)
+                try:
+                    audio = r.listen(source, timeout=5, phrase_time_limit=7)
+                except sr.WaitTimeoutError:
+                    self.mostrar_mensaje_chat('No escuché nada. Intenta de nuevo.', tipo='sistema')
+                    # Si estábamos en un diálogo de notas, relanzar la escucha para no quedar bloqueado
+                    if getattr(self, 'estado_nota', None):
+                        try:
+                            self.escuchar_signal.emit(600)
+                        except Exception:
+                            pass
+                    # Reanudar wake-word
+                    self.escuchando = True
+                    return
             try:
                 texto = r.recognize_google(audio, language='es-ES')
                 self.mostrar_mensaje_chat(texto, tipo='usuario')
                 self.responder_asistente(texto)
             except Exception:
                 self.mostrar_mensaje_chat('No se entendió, intenta de nuevo.', tipo='sistema')
+                if getattr(self, 'estado_nota', None):
+                    try:
+                        self.escuchar_signal.emit(600)
+                    except Exception:
+                        pass
+            # Reanudar wake-word
+            self.escuchando = True
         threading.Thread(target=reconocer, daemon=True).start()
 
     def responder_asistente(self, texto):
@@ -221,8 +328,87 @@ class AsistenteMain(QMainWindow):
         texto_l = texto.lower()
         respuesta = ""
         accion_realizada = False
+        # Flujo interactivo de notas (creación/edición)
+        if hasattr(self, 'estado_nota') and self.estado_nota:
+            estado = self.estado_nota
+            accion = estado.get('accion')
+            titulo = estado.get('titulo')
+            carpeta = estado.get('carpeta')
+            fase = estado.get('fase')
+            # Permitir cancelar
+            if 'cancelar' in texto_l:
+                self.estado_nota = None
+                respuesta = "Operación cancelada."
+                self.mostrar_mensaje_chat(respuesta, tipo='sistema')
+                self._hablar_async(respuesta)
+                return
+            # Esperando título
+            if fase == 'esperando_titulo':
+                posible_titulo = texto.strip()
+                if not posible_titulo:
+                    respuesta = "No escuché el título. Repite el nombre de la nota."
+                    self.mostrar_mensaje_chat(respuesta, tipo='sistema')
+                    self._hablar_async(respuesta)
+                    try:
+                        self.escuchar_signal.emit(800)
+                    except Exception:
+                        pass
+                    return
+                estado['titulo'] = posible_titulo
+                # Para crear: pedir contenido
+                if accion == 'crear':
+                    estado['fase'] = 'esperando_contenido'
+                    self.estado_nota = estado
+                    respuesta = f"¿Qué contenido quieres guardar en la nota '{posible_titulo}'?"
+                    self.mostrar_mensaje_chat(respuesta, tipo='sistema')
+                    self._hablar_async(respuesta)
+                    try:
+                        self.escuchar_signal.emit(800)
+                    except Exception:
+                        pass
+                    return
+                # Para editar: verificar existencia y pedir nuevo contenido
+                elif accion == 'editar':
+                    contenido_actual = self.leer_nota(posible_titulo, carpeta)
+                    if contenido_actual is None:
+                        respuesta = f"No encontré la nota '{posible_titulo}'."
+                        self.estado_nota = None
+                        self.mostrar_mensaje_chat(respuesta, tipo='sistema')
+                        self._hablar_async(respuesta)
+                        return
+                    estado['fase'] = 'esperando_contenido'
+                    self.estado_nota = estado
+                    respuesta = f"¿Qué nuevo contenido quieres para la nota '{posible_titulo}'?"
+                    self.mostrar_mensaje_chat(respuesta, tipo='sistema')
+                    self._hablar_async(respuesta)
+                    try:
+                        self.escuchar_signal.emit(800)
+                    except Exception:
+                        pass
+                    return
+            # Esperando contenido
+            if fase == 'esperando_contenido' and accion in ('crear','editar') and titulo:
+                contenido = texto
+                self.guardar_nota(titulo, contenido, carpeta)
+                if accion == 'crear':
+                    self.feedback_nota_guardada(titulo, 'guardada')
+                    respuesta = f"Nota '{titulo}' guardada."
+                else:
+                    self.feedback_nota_guardada(titulo, 'actualizada')
+                    respuesta = f"Nota '{titulo}' actualizada."
+                self.estado_nota = None
+                try:
+                    self.actualizar_notas_signal.emit()
+                except Exception:
+                    pass
+                self.mostrar_mensaje_chat(respuesta, tipo='sistema')
+                self._hablar_async(respuesta)
+                return
+            # Fallback dentro de estado
+            respuesta = "No entendí la acción de nota."
+            self.estado_nota = None
         # Saludo
-        if any(s in texto_l for s in ["hola", "buenos días", "buenas tardes", "buenas noches"]):
+        elif any(s in texto_l for s in ["hola", "buenos días", "buenas tardes", "buenas noches"]):
             respuesta = "¡Hola! ¿En qué puedo ayudarte?"
         # Sincronizar notas con Google Drive (subir y descargar)
         elif ("sincroniza" in texto_l or "sube" in texto_l) and "drive" in texto_l:
@@ -297,31 +483,59 @@ class AsistenteMain(QMainWindow):
         elif "quién eres" in texto_l or "quien eres" in texto_l or "tu nombre" in texto_l:
             respuesta = "Soy tu asistente inteligente, siempre listo para ayudarte."
         # Crear nota en carpeta
-        elif "crear nota" in texto_l:
+        elif any(k in texto_l for k in ["crear nota", "crea nota", "nueva nota", "crear una nota"]):
             import re
-            m = re.search(r"crear nota (.+?)( en (.+))?$", texto_l)
+            patron = r"(crear|crea|nueva) (?:una )?nota(?: llamada)?(?: (.+?))?(?: en (.+))?$"
+            m = re.search(patron, texto_l)
+            carpeta = None
+            titulo = None
             if m:
-                titulo = m.group(1).strip()
-                carpeta = m.group(3).strip() if m.group(3) else None
-                self.guardar_nota(titulo, "", carpeta)
-                respuesta = f"Nota '{titulo}' creada{' en '+carpeta if carpeta else ''}. ¿Qué contenido quieres guardar?"
+                titulo = m.group(2).strip() if m.group(2) else None
+                carpeta = m.group(3).strip() if len(m.groups()) >= 3 and m.group(3) else None
+            if titulo:
+                self.estado_nota = {'accion': 'crear', 'titulo': titulo, 'carpeta': carpeta, 'fase': 'esperando_contenido'}
+                respuesta = f"¿Qué contenido quieres guardar en la nota '{titulo}'{' en '+carpeta if carpeta else ''}?"
+                try:
+                    self.escuchar_signal.emit(800)
+                except Exception:
+                    pass
             else:
-                respuesta = "¿Cómo se llama la nota?"
+                # No se proporcionó título: pedirlo y re-escuchar
+                self.estado_nota = {'accion': 'crear', 'carpeta': carpeta, 'fase': 'esperando_titulo'}
+                respuesta = "¿Cómo se llamará la nota?"
+                try:
+                    self.escuchar_signal.emit(800)
+                except Exception:
+                    pass
         # Editar nota
-        elif "editar nota" in texto_l:
+        elif any(k in texto_l for k in ["editar nota", "edita nota"]):
             import re
-            m = re.search(r"editar nota (.+?)( en (.+))?$", texto_l)
+            patron = r"(editar|edita) (?:la )?nota(?: (.+?))?(?: en (.+))?$"
+            m = re.search(patron, texto_l)
+            carpeta = None
+            titulo = None
             if m:
-                titulo = m.group(1).strip()
-                carpeta = m.group(3).strip() if m.group(3) else None
+                titulo = m.group(2).strip() if m.group(2) else None
+                carpeta = m.group(3).strip() if len(m.groups()) >= 3 and m.group(3) else None
+            if titulo:
                 contenido = self.leer_nota(titulo, carpeta)
                 if contenido is not None:
+                    self.estado_nota = {'accion': 'editar', 'titulo': titulo, 'carpeta': carpeta, 'fase': 'esperando_contenido'}
                     respuesta = f"¿Qué nuevo contenido quieres para la nota '{titulo}'?"
-                    # Aquí podrías guardar el nuevo contenido en la siguiente interacción
+                    try:
+                        self.escuchar_signal.emit(800)
+                    except Exception:
+                        pass
                 else:
                     respuesta = f"No encontré la nota '{titulo}'."
             else:
-                respuesta = "¿Qué nota quieres editar?"
+                # No se proporcionó título: pedirlo
+                self.estado_nota = {'accion': 'editar', 'carpeta': carpeta, 'fase': 'esperando_titulo'}
+                respuesta = "¿De qué nota? Dime el título."
+                try:
+                    self.escuchar_signal.emit(800)
+                except Exception:
+                    pass
         # Eliminar nota
         elif "eliminar nota" in texto_l:
             import re
@@ -364,13 +578,29 @@ class AsistenteMain(QMainWindow):
         else:
             respuesta = 'Comando recibido: ' + texto
         self.mostrar_mensaje_chat(respuesta, tipo='sistema')
+        self._hablar_async(respuesta)
+
+    def _hablar_async(self, texto):
+        # Genera TTS y reproduce sin bloquear, limpia el archivo luego
         try:
             from gtts import gTTS
             import playsound
-            tts = gTTS(respuesta, lang='es')
-            tts.save('respuesta.mp3')
-            playsound.playsound('respuesta.mp3', True)
-            os.remove('respuesta.mp3')
+            fn = 'respuesta.mp3'
+            tts = gTTS(texto, lang='es')
+            tts.save(fn)
+            try:
+                playsound.playsound(fn, False)
+            except Exception:
+                pass
+            # Intentar borrar el archivo luego de unos segundos (hilo separado)
+            def _cleanup():
+                try:
+                    if os.path.exists(fn):
+                        os.remove(fn)
+                except Exception:
+                    pass
+            import threading as _t
+            _t.Timer(5.0, _cleanup).start()
         except Exception:
             pass
     def accion_microfono(self):
@@ -381,15 +611,29 @@ class AsistenteMain(QMainWindow):
         if not hasattr(self, '_escucha_iniciada'):
             self.iniciar_escucha_hey_asistente()
             self._escucha_iniciada = True
-    def __init__(self):
-        super().__init__()
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         self.setWindowTitle("Asistente Inteligente - Voz")
         self.setGeometry(200, 100, 420, 740)
         self.setStyleSheet("background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #111, stop:1 #444);")
+        # estado para flujo de notas
+        self.estado_nota = None
+        # señal para mensajes en UI
+        self.mensaje_signal.connect(self._append_mensaje)
+        # conectar señales auxiliares
+        try:
+            self.escuchar_signal.connect(self._programar_escucha)
+            self.actualizar_notas_signal.connect(self.cargar_lista_notas)
+        except Exception:
+            pass
+        # asegurar carpeta de notas
+        self.ensure_notas_dir()
+        # inicializar UI
         self.init_ui()
 
     def init_ui(self):
         # --- Estructura principal ---
+        from PyQt5.QtWidgets import QListWidget, QInputDialog
         central = QWidget()
         main_layout = QHBoxLayout(central)
         main_layout.setContentsMargins(20, 20, 20, 20)
@@ -456,28 +700,46 @@ class AsistenteMain(QMainWindow):
         notes_box = QWidget()
         notes_box.setStyleSheet("background:rgba(30,0,60,0.7);border:2px solid #a0f;border-radius:18px;")
         notes_box.setMinimumWidth(220)
-        notes_layout = QVBoxLayout(notes_box)
+        notes_layout = QVBoxLayout()
         notes_layout.setContentsMargins(14,14,14,14)
         notes_lbl = QLabel("Notas")
         notes_lbl.setStyleSheet("color:#a0f;font-size:18px;font-family:'Orbitron', 'Montserrat', Arial;font-weight:bold;")
         notes_layout.addWidget(notes_lbl)
-        self.notes_edit = QLineEdit()
-        self.notes_edit.setStyleSheet("background:rgba(0,0,0,0.18);color:#fff;border-radius:10px;padding:10px 8px;font-size:15px;")
-        self.notes_edit.setText("Preparar diapositivas para la presentación")
-        notes_layout.addWidget(self.notes_edit)
+        self.notes_list = QListWidget()
+        self.notes_list.setStyleSheet("background:rgba(0,0,0,0.18);color:#fff;border-radius:10px;font-size:15px;")
+        notes_layout.addWidget(self.notes_list)
+        btn_crear = QPushButton("Crear nota")
+        btn_crear.setStyleSheet("color:#a0f;font-size:17px;font-family:'Orbitron', 'Montserrat', Arial;border-radius:12px;padding:10px 0px;border:2px solid #a0f;background:transparent;")
+        btn_crear.clicked.connect(self.crear_nota_desde_gui)
+        notes_layout.addWidget(btn_crear)
+        btn_editar = QPushButton("Editar nota")
+        btn_editar.setStyleSheet("color:#a0f;font-size:17px;font-family:'Orbitron', 'Montserrat', Arial;border-radius:12px;padding:10px 0px;border:2px solid #a0f;background:transparent;")
+        btn_editar.clicked.connect(self.editar_nota_desde_gui)
+        notes_layout.addWidget(btn_editar)
+        btn_eliminar = QPushButton("Eliminar nota")
+        btn_eliminar.setStyleSheet("color:#a0f;font-size:17px;font-family:'Orbitron', 'Montserrat', Arial;border-radius:12px;padding:10px 0px;border:2px solid #a0f;background:transparent;")
+        btn_eliminar.clicked.connect(self.eliminar_nota_desde_gui)
+        notes_layout.addWidget(btn_eliminar)
         notes_box.setLayout(notes_layout)
         panel_notas.addWidget(notes_box)
-        # Botón guardar nota
-        btn_save = QPushButton("Guardar nota")
-        btn_save.setStyleSheet("color:#a0f;font-size:17px;font-family:'Orbitron', 'Montserrat', Arial;border-radius:12px;padding:10px 0px;border:2px solid #a0f;background:transparent;")
-        panel_notas.addWidget(btn_save)
         panel_notas.addStretch(1)
+        self.cargar_lista_notas()
 
         # --- Añadir paneles al layout principal ---
         main_layout.addLayout(panel_lateral, 1)
         main_layout.addLayout(panel_chat, 2)
         main_layout.addLayout(panel_notas, 1)
         self.setCentralWidget(central)
+
+    def _programar_escucha(self, delay_ms: int = 0):
+        # Ejecutar activar_reconocimiento_voz desde el hilo principal con QTimer
+        try:
+            if delay_ms and delay_ms > 0:
+                QTimer.singleShot(delay_ms, self.activar_reconocimiento_voz)
+            else:
+                self.activar_reconocimiento_voz()
+        except Exception:
+            self.activar_reconocimiento_voz()
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
