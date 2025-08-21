@@ -16,7 +16,7 @@ import sys
 import os
 import threading
 from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QDialog, QLineEdit, QComboBox, QListWidget, QTextEdit, QMessageBox, QInputDialog, QScrollArea, QShortcut
-from PyQt5.QtGui import QPainter, QPen, QColor, QLinearGradient
+from PyQt5.QtGui import QPainter, QPen, QColor, QLinearGradient, QIcon
 from PyQt5.QtCore import Qt, QTimer, QRectF, pyqtSignal
 
 # Asegurar que la carpeta 'src' esté en el path para widgets auxiliares
@@ -27,7 +27,8 @@ if SRC_DIR not in sys.path:
 
 # Importar funciones de voz desde el nuevo core; fallback a módulo antiguo si no existe
 try:
-    from src.assistant_app.core.voice import listen_once as escuchar_comando, speak as hablar
+    # Como añadimos la carpeta 'src' al sys.path, importamos sin el prefijo 'src.'
+    from assistant_app.core.voice import listen_once as escuchar_comando, speak as hablar
 except Exception:
     from voz import escuchar_comando, hablar
 import json
@@ -112,6 +113,11 @@ class AsistenteMain(QMainWindow):
         if not hasattr(self, 'chat_layout') or self.chat_layout is None:
             return
         msg = QLabel(texto)
+        msg.setWordWrap(True)
+        try:
+            msg.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        except Exception:
+            pass
         if tipo == 'usuario':
             msg.setStyleSheet(
                 "background:rgba(0,255,255,0.10);border-radius:12px;padding:10px 16px;font-size:16px;color:#0ff;"
@@ -223,12 +229,23 @@ class AsistenteMain(QMainWindow):
                     respuesta = "No pude abrir el navegador."
             else:
                 respuesta = "¿Qué aplicación deseas abrir?"
+        # Ayuda rápida para comandos escritos
+        elif texto_l in ("/ayuda", "ayuda", "help"):
+            respuesta = (
+                "Comandos útiles:\n"
+                "- crear evento <nombre> el YYYY-MM-DD [a las HH:MM]\n"
+                "- qué tengo hoy | qué tengo semana\n"
+                "- abrir calculadora | abrir bloc de notas | abrir navegador\n"
+                "- según internet <tu pregunta> | qué es <tema>\n"
+                "- crear nota <título> [en <carpeta>] | leer nota <título>\n"
+                "- eliminar nota <título> | buscar nota <palabra> [en <carpeta>]\n"
+            )
         # Decir la hora
         elif "hora" in texto_l:
             from datetime import datetime
             hora = datetime.now().strftime('%H:%M')
             respuesta = f"Son las {hora}."
-        # Buscar en Google
+        # Buscar en Internet (modo clásico Google)
         elif "busca" in texto_l or "buscar" in texto_l:
             import webbrowser
             import re
@@ -241,6 +258,30 @@ class AsistenteMain(QMainWindow):
                 respuesta = f"Buscando '{query}' en Google."
             else:
                 respuesta = "¿Qué quieres que busque en Google?"
+        # Preguntas con respuesta desde Internet (búsqueda + resumen)
+        elif any(p in texto_l for p in [
+            "según internet", "segun internet", "qué es", "que es", "quién es", "quien es",
+            "cómo funciona", "como funciona", "definición de", "definicion de", "investiga",
+            "busca en internet", "consulta en internet"
+        ]):
+            try:
+                import re
+                # importar desde 'src' ya está en sys.path
+                from web_search import search_and_answer
+                # extraer consulta después de indicaciones comunes
+                query = texto_l
+                for kw in ["según internet", "segun internet", "busca en internet", "consulta en internet", "investiga"]:
+                    query = query.replace(kw, "").strip()
+                # limpiar prefijos tipo "qué es", "quién es"
+                query = re.sub(r"^(qué es|que es|quién es|quien es|cómo funciona|como funciona|definición de|definicion de)\s*", "", query)
+                if not query:
+                    query = texto
+                respuesta = search_and_answer(query, max_results=3)
+            except Exception as e:
+                respuesta = (
+                    "Para responder con Internet necesito la librería 'duckduckgo_search'. "
+                    "Instálala con pip e inténtalo de nuevo. Detalle: " + str(e)
+                )
         # Reproducir música
         elif "reproduce" in texto_l or "pon música" in texto_l:
             import webbrowser
@@ -252,7 +293,9 @@ class AsistenteMain(QMainWindow):
                 from calendario import consultar_eventos
                 eventos, msg = consultar_eventos('hoy')
                 if eventos:
-                    lista = ", ".join([f"{ev['evento']} ({ev['fecha']})" for ev in eventos])
+                    def _fmt(ev):
+                        return f"{ev['evento']} ({ev['fecha']} {ev.get('hora','')}).".replace(' ()','')
+                    lista = ", ".join([_fmt(ev) for ev in eventos])
                     respuesta = f"Hoy tienes: {lista}."
                 else:
                     respuesta = msg
@@ -263,7 +306,9 @@ class AsistenteMain(QMainWindow):
                 from calendario import consultar_eventos
                 eventos, msg = consultar_eventos('semana')
                 if eventos:
-                    lista = ", ".join([f"{ev['evento']} ({ev['fecha']})" for ev in eventos])
+                    def _fmt(ev):
+                        return f"{ev['evento']} ({ev['fecha']} {ev.get('hora','')}).".replace(' ()','')
+                    lista = ", ".join([_fmt(ev) for ev in eventos])
                     respuesta = f"Esta semana: {lista}."
                 else:
                     respuesta = msg
@@ -272,18 +317,31 @@ class AsistenteMain(QMainWindow):
         # Calendario: crear evento
         elif "crear evento" in texto_l:
             import re
-            m = re.search(r"crear evento (.+?) (?:el|para) (\d{4}-\d{2}-\d{2})", texto_l)
+            # Acepta hora opcional: "a las HH:MM" o solo "HH:MM" al final
+            patron = r"crear evento (.+?) (?:el|para) (\d{4}-\d{2}-\d{2})(?:\s+(?:a las\s+)?(\d{1,2}:\d{2}))?"
+            m = re.search(patron, texto_l)
             if m:
                 evento = m.group(1).strip()
                 fecha = m.group(2)
+                hora = m.group(3) if m.lastindex and m.group(3) else None
+                # Normalizar hora a HH:MM
+                if hora:
+                    try:
+                        hh, mm = hora.split(":")
+                        hora = f"{int(hh):02d}:{int(mm):02d}"
+                    except Exception:
+                        hora = None
                 try:
                     from calendario import crear_evento
-                    msg = crear_evento(evento, fecha)
-                    respuesta = f"{msg} '{evento}' el {fecha}."
+                    msg = crear_evento(evento, fecha, hora)
+                    if hora:
+                        respuesta = f"{msg} '{evento}' el {fecha} a las {hora}."
+                    else:
+                        respuesta = f"{msg} '{evento}' el {fecha}."
                 except Exception as e:
                     respuesta = f"No pude crear el evento: {e}"
             else:
-                respuesta = "Di: 'crear evento <nombre> el YYYY-MM-DD'."
+                respuesta = "Di: 'crear evento <nombre> el YYYY-MM-DD [a las HH:MM]'."
         # Calendario: abrir calendario
         elif ("calendario" in texto_l) and ("abre" in texto_l or "abrir" in texto_l or "mostrar" in texto_l):
             try:
@@ -416,7 +474,22 @@ class AsistenteMain(QMainWindow):
         self.chat_layout = None
         self.chat_signal.connect(self.mostrar_mensaje_chat)
         self._escucha_iniciada = False
+        # Recordatorios de eventos (diario) y alertas puntuales (cada minuto)
+        self._recordatorio_fecha_mostrado = None
+        self._timer_recordatorios = None
+        self._timer_alertas = None
+        self._active_notifs = []
         self.init_ui()
+        # Iniciar recordatorios después de construir la UI
+        try:
+            self._iniciar_recordatorios()
+        except Exception:
+            pass
+        # Iniciar alertas puntuales (cada minuto)
+        try:
+            self._iniciar_alertas()
+        except Exception:
+            pass
 
     def init_ui(self) -> None:
         # --- Estructura principal ---
@@ -487,10 +560,15 @@ class AsistenteMain(QMainWindow):
         self.input_cmd = QLineEdit()
         self.input_cmd.setPlaceholderText("Escribe un comando o pregunta…")
         self.input_cmd.setStyleSheet("background:rgba(0,0,0,0.25);color:#fff;border-radius:10px;padding:10px;font-size:14px;border:1px solid #0ff;")
-        btn_enviar = QPushButton("Enviar")
-        btn_enviar.setStyleSheet("color:#0ff;border:1px solid #0ff;border-radius:10px;padding:10px;background:transparent;")
+        self.btn_enviar = QPushButton("Enviar")
+        try:
+            self.btn_enviar.setToolTip("Enviar mensaje (Enter)")
+            self.btn_enviar.setCursor(Qt.PointingHandCursor)
+        except Exception:
+            pass
+        self.btn_enviar.setStyleSheet("color:#0ff;border:1px solid #0ff;border-radius:10px;padding:10px;background:transparent;")
         cmd_row.addWidget(self.input_cmd, 1)
-        cmd_row.addWidget(btn_enviar)
+        cmd_row.addWidget(self.btn_enviar)
         panel_chat.addLayout(cmd_row)
         panel_chat.addStretch(1)
 
@@ -552,18 +630,216 @@ class AsistenteMain(QMainWindow):
         self.lista_notas.itemClicked.connect(self.cargar_nota_desde_lista)
         btn_save.clicked.connect(self.guardar_nota_desde_gui)
         btn_del.clicked.connect(self.eliminar_nota_desde_gui)
-        btn_enviar.clicked.connect(self.enviar_comando_escrito)
+        self.btn_enviar.clicked.connect(self.enviar_comando_escrito)
         self.input_cmd.returnPressed.connect(self.enviar_comando_escrito)
 
         # Inicializar combos/listas
         self.cargar_combo_carpetas()
         self.cargar_lista_notas()
+        # Enfocar el input del chat para escribir de inmediato
+        try:
+            self.input_cmd.setFocus()
+        except Exception:
+            pass
 
         # --- Añadir paneles al layout principal ---
         main_layout.addLayout(panel_lateral, 1)
         main_layout.addLayout(panel_chat, 2)
         main_layout.addLayout(panel_notas, 1)
         self.setCentralWidget(central)
+
+    # ===== Recordatorios de eventos =====
+    def _iniciar_recordatorios(self) -> None:
+        """Configura un temporizador que recuerda eventos del día una vez al día."""
+        # Mostrar inmediatamente si aplica
+        self._recordatorio_si_corresponde(force=True)
+        # Revisar cada 10 minutos si cambió el día
+        self._timer_recordatorios = QTimer(self)
+        self._timer_recordatorios.setInterval(10 * 60 * 1000)  # 10 minutos
+        self._timer_recorditorios_cb = getattr(self, "_recordatorio_si_corresponde")  # evitar pérdida por GC
+        self._timer_recordatorios.timeout.connect(self._recorditorio_timeout)
+        self._timer_recordatorios.start()
+
+    def _recorditorio_timeout(self) -> None:
+        try:
+            self._recordatorio_si_corresponde()
+        except Exception:
+            pass
+
+    def _recordatorio_si_corresponde(self, force: bool = False) -> None:
+        from datetime import datetime as _dt
+        hoy_str = str(_dt.now().date())
+        if (not force) and (self._recordatorio_fecha_mostrado == hoy_str):
+            return
+        # Consultar eventos de hoy
+        try:
+            from calendario import consultar_eventos
+            eventos, msg = consultar_eventos('hoy')
+        except Exception:
+            eventos = []
+            msg = "No pude consultar el calendario."
+        # Filtrar completados para no anunciar
+        pendientes = [ev for ev in eventos if not ev.get('completado')]
+        completados = [ev for ev in eventos if ev.get('completado')]
+        if pendientes:
+            lista = ", ".join([f"{ev['evento']} ({ev['fecha']} {ev.get('hora','')}).".replace(' ()','') for ev in pendientes])
+            aviso = f"Recordatorio: Hoy tienes {len(pendientes)} evento(s): {lista}."
+            if completados:
+                aviso += f" Ya completados: {len(completados)}."
+        else:
+            aviso = msg
+        # Emitir aviso solo si hay algo útil o si es la primera vez del día
+        if eventos:
+            self.chat_signal.emit(aviso, 'sistema')
+            try:
+                hablar(aviso)
+            except Exception:
+                pass
+        self._recordatorio_fecha_mostrado = hoy_str
+
+    # ===== Alertas de eventos (hora exacta y 5 minutos antes) =====
+    def _iniciar_alertas(self) -> None:
+        """Temporizador que revisa cada minuto si hay que disparar alertas."""
+        self._timer_alertas = QTimer(self)
+        self._timer_alertas.setInterval(60 * 1000)  # 1 minuto
+        self._timer_alertas.timeout.connect(self._revisar_alertas)
+        self._timer_alertas.start()
+
+    def _revisar_alertas(self) -> None:
+        from datetime import datetime as _dt
+        hora_actual = _dt.now().strftime('%H:%M')
+        fecha_actual = str(_dt.now().date())
+        try:
+            from calendario import leer_eventos
+            eventos = leer_eventos()
+        except Exception:
+            eventos = []
+        for ev in eventos:
+            fecha = ev.get('fecha')
+            hora = ev.get('hora')
+            if ev.get('completado'):
+                continue
+            if fecha != fecha_actual or not hora:
+                continue
+            # Comparar hora exacta
+            if hora == hora_actual:
+                self._disparar_alerta(ev, previo=False)
+            # Comparar 5 minutos antes
+            try:
+                h, m = map(int, hora.split(':'))
+                dt_ev = _dt.strptime(f"{fecha} {h:02d}:{m:02d}", "%Y-%m-%d %H:%M")
+                dt_prev = dt_ev - timedelta(minutes=5)
+                if _dt.now().strftime('%Y-%m-%d %H:%M') == dt_prev.strftime('%Y-%m-%d %H:%M'):
+                    self._disparar_alerta(ev, previo=True)
+            except Exception:
+                continue
+
+    def _disparar_alerta(self, ev: dict, previo: bool) -> None:
+        """Muestra en chat, reproduce sonido y notificación interactiva."""
+        titulo = ev.get('evento', 'Evento')
+        fecha = ev.get('fecha')
+        hora = ev.get('hora', '')
+        tipo = "(en 5 min) " if previo else ""
+        msg = f"Alerta {tipo}: {titulo} a las {hora} el {fecha}."
+        # Chat + voz
+        self.chat_signal.emit(msg, 'sistema')
+        try:
+            hablar(msg)
+        except Exception:
+            pass
+        # Sonido breve (usar winsound en Windows)
+        try:
+            if sys.platform == 'win32':
+                import winsound
+                winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
+        except Exception:
+            pass
+        # Notificación interactiva en Qt
+        try:
+            self._notificacion_interactiva_evento(titulo, fecha, hora, previo)
+        except Exception:
+            pass
+
+    def _notificar_sistema(self, titulo: str, mensaje: str) -> None:
+        """Muestra una notificación del sistema en Windows.
+
+        En Windows usa win10toast si está disponible; si no, intenta Toast de winrt.
+        """
+        if sys.platform != 'win32':
+            return
+        # Intentar win10toast
+        try:
+            from win10toast import ToastNotifier  # type: ignore
+            toaster = ToastNotifier()
+            toaster.show_toast(titulo, mensaje, icon_path=None, duration=5, threaded=True)
+            return
+        except Exception:
+            pass
+        # Fallback: simple aviso por consola si no hay backend
+        try:
+            print(f"[NOTIFICACIÓN] {titulo}: {mensaje}")
+        except Exception:
+            pass
+
+    def _notificacion_interactiva_evento(self, titulo: str, fecha: str, hora: str, previo: bool) -> None:
+        """Muestra un pequeño diálogo flotante con acciones: Ya lo hice, Posponer 5 min."""
+        try:
+            from PyQt5.QtWidgets import QDialog, QVBoxLayout, QLabel, QPushButton, QHBoxLayout
+        except Exception:
+            return
+        dlg = QDialog(self)
+        dlg.setWindowFlags(dlg.windowFlags() | Qt.Tool | Qt.WindowStaysOnTopHint)
+        dlg.setStyleSheet("background:#1e1f29;color:#fff;QPushButton{border:1px solid #0ff;border-radius:8px;padding:6px 10px;background:transparent;color:#0ff;} QPushButton:hover{background:rgba(0,255,255,0.1);} QLabel{color:#e6e8ff;}")
+        dlg.setWindowTitle("Recordatorio de evento")
+        lay = QVBoxLayout()
+        txt = "(en 5 min) " if previo else ""
+        lbl = QLabel(f"{txt}{titulo} — {fecha} {hora}")
+        lay.addWidget(lbl)
+        btns = QHBoxLayout()
+        btn_done = QPushButton("Ya lo hice")
+        btn_snooze = QPushButton("Posponer 5 min")
+        btns.addWidget(btn_done)
+        btns.addWidget(btn_snooze)
+        lay.addLayout(btns)
+        dlg.setLayout(lay)
+        dlg.resize(380, 120)
+
+        def marcar_completado():
+            try:
+                from calendario import marcar_evento_completado
+                marcar_evento_completado(titulo, fecha, hora or None, True)
+            except Exception:
+                pass
+            dlg.accept()
+
+        def posponer():
+            # Programar una alerta manual 5 minutos después
+            try:
+                from datetime import datetime as _dt
+                from datetime import timedelta as _td
+                objetivo = _dt.now() + _td(minutes=5)
+                # Temporizador único
+                t = QTimer(self)
+                t.setSingleShot(True)
+                t.setInterval(5 * 60 * 1000)
+                def fire():
+                    ev = {'evento': titulo, 'fecha': objetivo.strftime('%Y-%m-%d'), 'hora': objetivo.strftime('%H:%M')}
+                    self._disparar_alerta(ev, previo=False)
+                t.timeout.connect(fire)
+                t.start()
+            except Exception:
+                pass
+            dlg.accept()
+
+        btn_done.clicked.connect(marcar_completado)
+        btn_snooze.clicked.connect(posponer)
+        self._active_notifs.append(dlg)
+        dlg.show()
+        try:
+            dlg.raise_()
+            dlg.activateWindow()
+        except Exception:
+            pass
 
     # ===== Helpers de notas (GUI) =====
     def carpeta_actual(self) -> str | None:
@@ -717,6 +993,16 @@ class AsistenteMain(QMainWindow):
                 pass
             lay = QVBoxLayout(dlg)
             calw = CalendarioEventos(eventos_path, parent=dlg)
+            try:
+                calw.evento_toggle_completado.connect(
+                    lambda titulo, fecha, hora, done: self.chat_signal.emit(
+                        ("✔️ Evento completado: " if done else "↩️ Evento marcado como pendiente: ") +
+                        f"{titulo} ({fecha}{' '+hora if hora else ''})",
+                        'sistema'
+                    )
+                )
+            except Exception:
+                pass
             lay.addWidget(calw)
             dlg.setLayout(lay)
             # Abrir maximizado (con barra de título visible)

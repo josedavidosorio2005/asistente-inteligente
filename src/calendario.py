@@ -10,14 +10,20 @@ from datetime import datetime, timedelta
 EVENTOS_PATH = os.path.join(os.path.dirname(__file__), '..', 'resumenes', 'eventos.json')
 
 
-def crear_evento(evento: str, fecha: str) -> str:
-    """Crea un evento con fecha ISO (YYYY-MM-DD). Devuelve mensaje de estado."""
+def crear_evento(evento: str, fecha: str, hora: str | None = None) -> str:
+    """Crea un evento con fecha ISO (YYYY-MM-DD) y hora opcional (HH:MM).
+
+    Devuelve mensaje de estado.
+    """
     if os.path.exists(EVENTOS_PATH):
         with open(EVENTOS_PATH, 'r', encoding='utf-8') as f:
             eventos = json.load(f)
     else:
         eventos = []
-    eventos.append({'evento': evento, 'fecha': fecha})
+    ev = {'evento': evento, 'fecha': fecha, 'completado': False}
+    if hora:
+        ev['hora'] = hora
+    eventos.append(ev)
     with open(EVENTOS_PATH, 'w', encoding='utf-8') as f:
         json.dump(eventos, f, ensure_ascii=False, indent=2)
     return "Evento creado."
@@ -74,3 +80,40 @@ def eliminar_evento(idx: int) -> str:
         return "Evento eliminado."
     else:
         return "Índice no válido."
+
+def leer_eventos() -> list[dict]:
+    """Lee y devuelve todos los eventos guardados (puede incluir clave 'hora')."""
+    if not os.path.exists(EVENTOS_PATH):
+        return []
+    try:
+        with open(EVENTOS_PATH, 'r', encoding='utf-8') as f:
+            eventos = json.load(f)
+        if isinstance(eventos, list):
+            return eventos
+        return []
+    except Exception:
+        return []
+
+def marcar_evento_completado(evento: str, fecha: str, hora: str | None = None, completado: bool = True) -> bool:
+    """Marca el primer evento que coincida como completado (o no).
+
+    Coincide por fecha y título; si se proporciona hora, también por hora.
+    Devuelve True si se actualizó algo.
+    """
+    if not os.path.exists(EVENTOS_PATH):
+        return False
+    try:
+        with open(EVENTOS_PATH, 'r', encoding='utf-8') as f:
+            eventos = json.load(f)
+        cambiado = False
+        for ev in eventos:
+            if ev.get('fecha') == fecha and ev.get('evento') == evento and (hora is None or ev.get('hora') == hora):
+                ev['completado'] = bool(completado)
+                cambiado = True
+                break
+        if cambiado:
+            with open(EVENTOS_PATH, 'w', encoding='utf-8') as f:
+                json.dump(eventos, f, ensure_ascii=False, indent=2)
+        return cambiado
+    except Exception:
+        return False
