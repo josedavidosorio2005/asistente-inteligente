@@ -874,6 +874,44 @@ class AsistenteMain(QMainWindow):
             if hasattr(self, 'btn_config_toggle'):
                 self.btn_config_toggle.setText("Configuración")
 
+    def _scan_mics(self, force: bool = False):
+        """Escanea dispositivos de entrada y guarda solo los utilizables.
+        Intenta abrir cada índice; si falla se excluye.
+        Cachea resultado para reutilizar rápido.
+        """
+        import time
+        if getattr(self, '_mic_scan_in_progress', False):
+            return
+        # Reusar cache reciente (<60s) salvo force
+        if not force and hasattr(self, '_mic_scan_cache'):
+            cache = self._mic_scan_cache
+            if time.time() - cache.get('ts', 0) < 60 and cache.get('valid'):
+                return
+        self._mic_scan_in_progress = True
+        def _job():
+            from speech_recognition import Microphone
+            valid = []
+            try:
+                names = Microphone.list_microphone_names() or []
+            except Exception:
+                names = []
+            for i, name in enumerate(names):
+                try:
+                    with Microphone(device_index=i) as _src:
+                        pass  # Apertura OK
+                    valid.append((i, name))
+                except Exception:
+                    continue
+            self._mic_scan_cache = {'valid': valid, 'ts': time.time()}
+            self._mic_scan_in_progress = False
+        threading.Thread(target=_job, daemon=True).start()
+
+    def _get_valid_mics(self):
+        """Devuelve lista de (index, name) ya escaneada (puede lanzar escaneo si falta)."""
+        self._scan_mics()  # inicia si no hay
+        cache = getattr(self, '_mic_scan_cache', {'valid': []})
+        return cache.get('valid', [])
+
     def _show_device_menu(self, kind: str):
         from PyQt5.QtWidgets import QMenu, QAction
         menu = QMenu(self)
@@ -883,10 +921,12 @@ class AsistenteMain(QMainWindow):
             "QMenu::item:selected{background:rgba(0,255,255,0.15);color:#fff;}"
             "QMenu::separator{height:1px;background:rgba(255,255,255,0.12);margin:6px 4px;}"
         )
-        try:
-            current_mics = sr.Microphone.list_microphone_names() if kind == 'input' else []
-        except Exception:
-            current_mics = []
+        if kind == 'input':
+            valid = self._get_valid_mics()
+            scanning = getattr(self, '_mic_scan_in_progress', False)
+        else:
+            valid = []
+            scanning = False
         # Acción predeterminada
         act_default = QAction("Predeterminado del sistema", menu)
         act_default.setCheckable(True)
@@ -900,22 +940,32 @@ class AsistenteMain(QMainWindow):
                 self._actualizar_label_mic()
         act_default.triggered.connect(set_default)
         if kind == 'input':
-            # Listar mics
-            for i, name in enumerate(current_mics):
-                act = QAction(f"{name}", menu)
-                act.setCheckable(True)
-                if self.config_mic_index == i:
-                    act.setChecked(True)
-                def make_handler(index=i):
-                    return lambda: self._select_microphone(index)
-                act.triggered.connect(make_handler(i))
-                menu.addAction(act)
+            if scanning and not valid:
+                info = QAction("Escaneando dispositivos...", menu)
+                info.setEnabled(False)
+                menu.addAction(info)
+            elif not valid:
+                none_act = QAction("(No se detectaron micrófonos utilizables)", menu)
+                none_act.setEnabled(False)
+                menu.addAction(none_act)
+            else:
+                for i, name in valid:
+                    act = QAction(f"{name}", menu)
+                    act.setCheckable(True)
+                    if self.config_mic_index == i:
+                        act.setChecked(True)
+                    def make_handler(index=i):
+                        return lambda: self._select_microphone(index)
+                    act.triggered.connect(make_handler(i))
+                    menu.addAction(act)
             menu.addSeparator()
-            act_refresh = QAction("Refrescar lista", menu)
-            act_refresh.triggered.connect(lambda: self._refresh_devices_menu(menu, kind))
-            menu.addAction(act_refresh)
+            act_refresh_fast = QAction("Re-escanear rápido", menu)
+            act_refresh_fast.triggered.connect(lambda: self._refresh_devices_menu(menu, kind, deep=False))
+            menu.addAction(act_refresh_fast)
+            act_refresh_deep = QAction("Re-escanear profundo", menu)
+            act_refresh_deep.triggered.connect(lambda: self._refresh_devices_menu(menu, kind, deep=True))
+            menu.addAction(act_refresh_deep)
         else:
-            # Placeholder salida
             placeholder = QAction("(Solo predeterminado por ahora)", menu)
             placeholder.setEnabled(False)
             menu.addAction(placeholder)
@@ -923,13 +973,18 @@ class AsistenteMain(QMainWindow):
         pos = btn.mapToGlobal(btn.rect().bottomLeft())
         menu.exec_(pos)
 
-    def _refresh_devices_menu(self, old_menu, kind):
-        # Cerrar y reabrir menú actualizado
+    def _refresh_devices_menu(self, old_menu, kind, deep=False):
         try:
             old_menu.close()
         except Exception:
             pass
-        QTimer.singleShot(0, lambda: self._show_device_menu(kind))
+        if kind == 'input':
+            if deep:
+                self._scan_mics(force=True)
+            else:
+                # Forzar reuso de cache pero si estaba escaneando dejar que termine
+                self._scan_mics(force=False)
+        QTimer.singleShot(250 if deep else 120, lambda: self._show_device_menu(kind))
 
     def _select_microphone(self, index: int):
         self.config_mic_index = index
