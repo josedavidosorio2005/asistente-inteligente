@@ -15,7 +15,7 @@ Buenas prácticas aplicadas:
 import sys
 import os
 import threading
-from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QDialog, QLineEdit, QComboBox, QListWidget, QTextEdit, QMessageBox, QInputDialog, QScrollArea, QShortcut
+from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QDialog, QLineEdit, QComboBox, QListWidget, QTextEdit, QMessageBox, QInputDialog, QScrollArea, QShortcut, QSizePolicy, QMenu, QWidgetAction
 from PyQt5.QtGui import QPainter, QPen, QColor, QLinearGradient, QIcon
 from PyQt5.QtCore import Qt, QTimer, QRectF, pyqtSignal
 
@@ -209,6 +209,147 @@ class AsistenteMain(QMainWindow):
         texto_l = texto.lower()
         respuesta = ""
         accion_realizada = False
+        # --- Nueva capa NLP ---
+        try:
+            from src import nlp
+        except Exception:
+            import nlp  # type: ignore
+        try:
+            analysis = nlp.analyze(texto)
+        except Exception:
+            analysis = {"intent": None}
+        intent = analysis.get('intent') if isinstance(analysis, dict) else None
+        if intent == 'greet':
+            respuesta = "¡Hola! ¿En qué puedo ayudarte?"
+            self.chat_signal.emit(respuesta, 'sistema'); self.hablar_async(respuesta); return
+        if intent == 'help':
+            respuesta = (
+                "Comandos rápidos: crear evento, eliminar evento, qué tengo hoy/semana, crear nota, buscar nota, abrir calculadora, /limpiar_legacy, cambiar tema claro/oscuro, cambiar voz <nombre>."
+            )
+            self.chat_signal.emit(respuesta, 'sistema'); self.hablar_async(respuesta); return
+        if intent == 'time':
+            from datetime import datetime as _dt
+            respuesta = f"Son las {_dt.now().strftime('%H:%M')}"
+            self.chat_signal.emit(respuesta, 'sistema'); self.hablar_async(respuesta); return
+        if intent == 'create_event':
+            p = analysis.get('params', {})
+            try:
+                from calendario import crear_evento
+                hora = p.get('time') or None
+                if hora:
+                    try:
+                        h,mi = map(int,hora.split(':')); hora = f"{h:02d}:{mi:02d}"
+                    except Exception: pass
+                msg = crear_evento(p.get('title','(sin título)'), p.get('date'), hora)
+                respuesta = msg
+            except Exception as e:
+                respuesta = f"Error creando evento: {e}"
+            self.chat_signal.emit(respuesta, 'sistema'); self.hablar_async(respuesta); return
+        if intent == 'delete_event':
+            p = analysis.get('params', {})
+            try:
+                from calendario import eliminar_evento_por_datos
+                hora = p.get('time') or None
+                if hora:
+                    try:
+                        h,mi = map(int,hora.split(':')); hora = f"{h:02d}:{mi:02d}"
+                    except Exception: pass
+                eliminados = eliminar_evento_por_datos(p.get('title',''), p.get('date'), hora)
+                respuesta = 'Evento eliminado' if eliminados else 'No se encontró el evento'
+            except Exception as e:
+                respuesta = f"Error eliminando evento: {e}"
+            self.chat_signal.emit(respuesta, 'sistema'); self.hablar_async(respuesta); return
+        if intent == 'query_events_day':
+            try:
+                try:
+                    from src import calendario  # type: ignore
+                except Exception:
+                    import calendario  # type: ignore
+                eventos, msg = calendario.consultar_eventos('hoy')
+                if eventos:
+                    lista = ", ".join([f"{ev['evento']} ({ev['fecha']} {ev.get('hora','')})".replace(' ()','') for ev in eventos])
+                    respuesta = f"Hoy: {lista}"
+                else:
+                    respuesta = msg
+            except Exception as e:
+                import traceback
+                tb = traceback.format_exc(limit=2)
+                respuesta = f"No pude consultar eventos de hoy: {e}"
+                self.chat_signal.emit(f"[debug eventos hoy]\n{tb}", 'sistema')
+            self.chat_signal.emit(respuesta, 'sistema'); self.hablar_async(respuesta); return
+        if intent == 'query_events_week':
+            try:
+                try:
+                    from src import calendario  # type: ignore
+                except Exception:
+                    import calendario  # type: ignore
+                eventos, msg = calendario.consultar_eventos('semana')
+                if eventos:
+                    lista = ", ".join([f"{ev['evento']} ({ev['fecha']} {ev.get('hora','')})".replace(' ()','') for ev in eventos])
+                    respuesta = f"Semana: {lista}"
+                else:
+                    respuesta = msg
+            except Exception as e:
+                import traceback
+                tb = traceback.format_exc(limit=2)
+                respuesta = f"No pude consultar eventos de la semana: {e}"
+                self.chat_signal.emit(f"[debug eventos semana]\n{tb}", 'sistema')
+            self.chat_signal.emit(respuesta, 'sistema'); self.hablar_async(respuesta); return
+        if intent == 'create_note':
+            p = analysis.get('params', {})
+            self.guardar_nota(p.get('title','(sin título)'), '', p.get('folder'))
+            respuesta = f"Nota '{p.get('title')}' creada."
+            self.chat_signal.emit(respuesta, 'sistema'); self.hablar_async(respuesta); return
+        if intent == 'delete_note':
+            p = analysis.get('params', {})
+            ok = self.eliminar_nota(p.get('title'), p.get('folder'))
+            respuesta = 'Nota eliminada' if ok else 'No se encontró la nota'
+            self.chat_signal.emit(respuesta, 'sistema'); self.hablar_async(respuesta); return
+        if intent == 'search_note':
+            p = analysis.get('params', {})
+            res = self.buscar_notas(p.get('term'), p.get('folder'))
+            if res:
+                respuesta = 'Notas: ' + ', '.join([t for t,_ in res])
+            else:
+                respuesta = 'Sin resultados'
+            self.chat_signal.emit(respuesta, 'sistema'); self.hablar_async(respuesta); return
+        if intent == 'reminder_create':
+            p = analysis.get('params', {})
+            when = p.get('when_iso') or p.get('when_text')
+            respuesta = f"Recordatorio creado: {p.get('title')} para {when}" if when else "Recordatorio registrado"
+            self.chat_signal.emit(respuesta, 'sistema'); self.hablar_async(respuesta); return
+        if intent == 'change_theme':
+            p = analysis.get('params', {})
+            theme = p.get('theme')
+            if theme in ('claro','oscuro'):
+                self.combo_ui_theme.setCurrentText(theme)
+                self._persist_theme(theme)
+                respuesta = f"Tema cambiado a {theme}"
+            else:
+                respuesta = f"Tema '{theme}' no reconocido"
+            self.chat_signal.emit(respuesta, 'sistema'); self.hablar_async(respuesta); return
+        if intent == 'change_voice':
+            p = analysis.get('params', {})
+            voice = p.get('voice')
+            # Intento heurístico: si menciona 'edge' cambiar provider
+            if 'edge' in voice.lower() and self.combo_voice_provider.findText('edge') != -1:
+                self.combo_voice_provider.setCurrentText('edge')
+            respuesta = f"Voz solicitada: {voice} (ajusta en panel si es necesario)"
+            self.chat_signal.emit(respuesta, 'sistema'); self.hablar_async(respuesta); return
+        if intent == 'cleanup_legacy':
+            ok = db.cleanup_legacy()
+            respuesta = 'Legacy renombrado' if ok else 'Nada que limpiar'
+            self.chat_signal.emit(respuesta, 'sistema'); self.hablar_async(respuesta); return
+        if intent == 'open_app':
+            p = analysis.get('params', {})
+            app = p.get('app')
+            # Placeholder: solo responde
+            respuesta = f"Intentaría abrir {app}" if app else "¿Qué aplicación deseas abrir?"
+            self.chat_signal.emit(respuesta, 'sistema'); self.hablar_async(respuesta); return
+        if intent == 'exit_app':
+            respuesta = 'Cerrando asistente.'
+            self.chat_signal.emit(respuesta, 'sistema'); self.hablar_async(respuesta)
+            self.close(); return
         # Saludo
         if any(s in texto_l for s in ["hola", "buenos días", "buenas tardes", "buenas noches"]):
             respuesta = "¡Hola! ¿En qué puedo ayudarte?"
@@ -607,15 +748,16 @@ class AsistenteMain(QMainWindow):
             self.btn_help.setToolTip("Mostrar/ocultar ayuda de comandos")
         except Exception:
             pass
-        # Contenedor de ayuda plegable
+        # Contenedor de ayuda plegable (colapsado inicialmente)
         self.help_container = QWidget()
         help_v = QVBoxLayout(self.help_container)
         help_v.setContentsMargins(0, 0, 0, 0)
         help_v.setSpacing(8)
         self.help_scroll = QScrollArea()
         self.help_scroll.setWidgetResizable(True)
+        self.help_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.help_scroll.setStyleSheet(
-            "QScrollArea{background:rgba(10,20,40,0.45);border:1px solid #0ff;border-radius:12px;}"
+            "QScrollArea{background:rgba(10,20,40,0.55);border:1px solid #0ff;border-radius:12px;}"
             "QScrollBar:vertical{background:transparent;width:8px;}"
             "QScrollBar::handle:vertical{background:#0ff;border-radius:4px;}"
         )
@@ -630,11 +772,16 @@ class AsistenteMain(QMainWindow):
             self.help_label.setOpenExternalLinks(True)
         except Exception:
             pass
-        self.help_label.setText("")
+        self.help_label.setText("")  # contenido se establece al abrir
         help_inner_l.addWidget(self.help_label)
         self.help_scroll.setWidget(help_inner)
         help_v.addWidget(self.help_scroll)
         self.help_container.setVisible(False)
+        self.help_container.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        self.help_container.setMinimumHeight(0)
+        self.help_container.setMaximumHeight(0)
+        self.help_container.setStyleSheet(self.help_container.styleSheet() + ";border:0px solid transparent;")
+        self._help_open = False
 
         # Panel de configuración plegable
         self.config_container = QWidget()
@@ -888,6 +1035,12 @@ class AsistenteMain(QMainWindow):
         except Exception:
             pass
 
+        # Conectar botón de ayuda
+        try:
+            self.btn_help.clicked.connect(self._show_help_menu)
+        except Exception:
+            pass
+
         # --- Panel de notas ---
         panel_notas = QVBoxLayout()
         panel_notas.setSpacing(10)
@@ -938,7 +1091,7 @@ class AsistenteMain(QMainWindow):
         self.btn_enviar.clicked.connect(self.enviar_comando_escrito)
         self.input_cmd.returnPressed.connect(self.enviar_comando_escrito)
         try:
-            self.btn_help.clicked.connect(self._toggle_help)
+            self.btn_help.clicked.connect(self._show_help_menu)
         except Exception:
             pass
         self.btn_config_toggle.clicked.connect(self._toggle_config)
@@ -1001,6 +1154,102 @@ class AsistenteMain(QMainWindow):
         }.get(theme, '')
         self.setStyleSheet(base)
         # Ajustes mínimos (placeholder para ampliar)
+
+    # ---------------- Ayuda avanzada -----------------
+    def _build_help(self) -> str:
+        return (
+            "<h3 style='margin-top:0;color:#0ff;'>Comandos disponibles</h3>"
+            "<b>Saludo:</b> hola, buenos días...<br>"
+            "<b>Ayuda:</b> ayuda, /ayuda, help<br>"
+            "<b>Hora:</b> qué hora es<br>"
+            "<b>Eventos:</b><br>"
+            "&nbsp;&nbsp;Crear: crear evento Reunión el 2025-08-21 a las 10:30<br>"
+            "&nbsp;&nbsp;Eliminar: eliminar evento Reunión el 2025-08-21 a las 10:30<br>"
+            "&nbsp;&nbsp;Agenda hoy: qué tengo hoy | agenda hoy<br>"
+            "&nbsp;&nbsp;Agenda semana: qué tengo semana | agenda semana<br>"
+            "<b>Notas:</b><br>"
+            "&nbsp;&nbsp;Crear: crear nota Mi nota en Proyectos<br>"
+            "&nbsp;&nbsp;Eliminar: eliminar nota Mi nota en Proyectos<br>"
+            "&nbsp;&nbsp;Buscar: buscar nota presupuesto en Proyectos<br>"
+            "<b>Recordatorios:</b> crear recordatorio Llamar a Juan para mañana a las 9am<br>"
+            "<b>Tema:</b> cambia tema claro | cambia tema oscuro<br>"
+            "<b>Voz:</b> cambia voz edge español femenina | cambia voz gtts<br>"
+            "<b>Aplicaciones:</b> abrir calculadora | abrir navegador<br>"
+            "<b>Limpiar legacy:</b> /limpiar_legacy<br>"
+            "<b>Salir:</b> salir | cerrar asistente<br>"
+            "<hr style='border:0;border-top:1px solid #0ff;margin:10px 0;'>"
+            "<small style='color:#8be9ff;'>Consejo: puedes hablar o escribir; el NLP soporta fechas naturales si dateparser está instalado.</small>"
+        )
+
+    def _toggle_help(self):
+        if not hasattr(self, 'help_container'):
+            return
+        abrir = not self.help_container.isVisible()
+        if abrir:
+            # Cerrar config si abierta
+            if hasattr(self, 'config_container') and self.config_container.isVisible():
+                self.config_container.hide()
+            # Cargar contenido si vacío
+            if hasattr(self, 'help_label') and (not self.help_label.text().strip() or len(self.help_label.text()) < 50):
+                try:
+                    self.help_label.setText(self._build_help())
+                except Exception:
+                    self.help_label.setText("Ayuda no disponible")
+            # Quitar límites de altura para que layout calcule
+            self.help_container.setMinimumHeight(0)
+            self.help_container.setMaximumHeight(16777215)
+            self.help_container.show()
+            self.help_container.adjustSize()
+            self._help_open = True
+            try:
+                self.chat_signal.emit("Ayuda abierta.", 'sistema')
+            except Exception:
+                pass
+        else:
+            self.help_container.hide()
+            self._help_open = False
+            try:
+                self.chat_signal.emit("Ayuda cerrada.", 'sistema')
+            except Exception:
+                pass
+
+    def _show_help_menu(self):
+        """Muestra un menú flotante (dropdown) con la ayuda, anclado al botón ?."""
+        try:
+            menu = QMenu(self)
+            menu.setStyleSheet(
+                "QMenu{background:#0b1420;border:1px solid #0ff;padding:6px;border-radius:10px;}"
+                "QMenu::item{padding:4px 8px;color:#d0faff;border-radius:6px;}"
+                "QMenu::item:selected{background:rgba(0,255,255,0.15);color:#fff;}"
+            )
+            # Contenedor personalizado
+            cont = QWidget()
+            lay = QVBoxLayout(cont)
+            lay.setContentsMargins(4,4,4,4)
+            lay.setSpacing(4)
+            lbl = QLabel(self._build_help())
+            lbl.setWordWrap(True)
+            lbl.setTextFormat(Qt.RichText)
+            lbl.setOpenExternalLinks(True)
+            lbl.setStyleSheet("color:#e6e8ff;font-size:13px;min-width:320px;max-width:360px;")
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            inner = QWidget()
+            il = QVBoxLayout(inner)
+            il.setContentsMargins(0,0,0,0)
+            il.addWidget(lbl)
+            scroll.setWidget(inner)
+            scroll.setStyleSheet("QScrollArea{border:0;background:transparent;} QScrollBar:vertical{background:transparent;width:8px;} QScrollBar::handle:vertical{background:#0ff;border-radius:4px;}")
+            lay.addWidget(scroll)
+            act = QWidgetAction(menu)
+            act.setDefaultWidget(cont)
+            menu.addAction(act)
+            # Posición bajo el botón
+            global_pos = self.btn_help.mapToGlobal(self.btn_help.rect().bottomLeft())
+            menu.exec_(global_pos)
+        except Exception:
+            # Fallback al panel si falla
+            self._toggle_help()
 
     def _actualizar_label_mic(self, preview_index=None):
         idx = preview_index if preview_index is not None else getattr(self, 'config_mic_index', None)
@@ -1199,7 +1448,7 @@ class AsistenteMain(QMainWindow):
         pendientes = [ev for ev in eventos if not ev.get('completado')]
         completados = [ev for ev in eventos if ev.get('completado')]
         if pendientes:
-            lista = ", ".join([f"{ev['evento']} ({ev['fecha']} {ev.get('hora','')}).".replace(' ()','') for ev in pendientes])
+            lista = ", ".join([f"{ev['evento']} ({ev['fecha']} {ev.get('hora','')})".replace(' ()','') for ev in pendientes])
             aviso = f"Recordatorio: Hoy tienes {len(pendientes)} evento(s): {lista}."
             if completados:
                 aviso += f" Ya completados: {len(completados)}."
