@@ -509,6 +509,53 @@ class AsistenteMain(QMainWindow):
         titulo = QLabel("Asistente de PC")
         titulo.setStyleSheet("color:#0ff;font-size:22px;font-family:'Orbitron', 'Montserrat', Arial;font-weight:bold;")
         panel_lateral.addWidget(titulo, alignment=Qt.AlignHCenter)
+        # Botón circular de ayuda (izquierda) que despliega comandos
+        self.btn_help = QPushButton("?")
+        self.btn_help.setFixedSize(40, 40)
+        self.btn_help.setStyleSheet(
+            "border-radius:20px;border:2px solid #0ff;color:#0ff;background:transparent;"
+            "font-weight:bold;font-size:16px;min-width:40px;min-height:40px;"
+        )
+        try:
+            self.btn_help.setCursor(Qt.PointingHandCursor)
+            self.btn_help.setToolTip("Mostrar/ocultar ayuda de comandos")
+        except Exception:
+            pass
+        # Contenedor de ayuda plegable en el mismo panel
+        self.help_container = QWidget()
+        help_v = QVBoxLayout(self.help_container)
+        help_v.setContentsMargins(0, 0, 0, 0)
+        help_v.setSpacing(8)
+        self.help_scroll = QScrollArea()
+        self.help_scroll.setWidgetResizable(True)
+        self.help_scroll.setStyleSheet(
+            "QScrollArea{background:rgba(10,20,40,0.45);border:1px solid #0ff;border-radius:12px;}"
+            "QScrollBar:vertical{background:transparent;width:8px;}"
+            "QScrollBar::handle:vertical{background:#0ff;border-radius:4px;}"
+        )
+        help_inner = QWidget()
+        help_inner_l = QVBoxLayout(help_inner)
+        help_inner_l.setContentsMargins(12, 12, 12, 12)
+        self.help_label = QLabel()
+        self.help_label.setWordWrap(True)
+        self.help_label.setStyleSheet("color:#e6e8ff;font-size:14px;")
+        try:
+            self.help_label.setTextFormat(Qt.RichText)
+            self.help_label.setOpenExternalLinks(True)
+        except Exception:
+            pass
+        self.help_label.setText("")
+        help_inner_l.addWidget(self.help_label)
+        self.help_scroll.setWidget(help_inner)
+        help_v.addWidget(self.help_scroll)
+        self.help_container.setVisible(False)
+        # Colocar botón y ayuda en el panel lateral
+        btn_row = QHBoxLayout()
+        btn_row.setContentsMargins(0, 0, 0, 0)
+        btn_row.addWidget(self.btn_help, alignment=Qt.AlignLeft)
+        btn_row.addStretch(1)
+        panel_lateral.addLayout(btn_row)
+        panel_lateral.addWidget(self.help_container)
         def menu_btn(text, icon=None):
             btn = QPushButton(text)
             btn.setFixedHeight(48)
@@ -578,6 +625,13 @@ class AsistenteMain(QMainWindow):
             self.shortcut_mic.activated.connect(self.accion_microfono)
         except Exception:
             pass
+        # Atajo global ESC para cerrar la app
+        try:
+            self.shortcut_exit = QShortcut(Qt.Key_Escape, self)
+            self.shortcut_exit.setContext(Qt.ApplicationShortcut)
+            self.shortcut_exit.activated.connect(self.cerrar_aplicacion)
+        except Exception:
+            pass
 
         # --- Panel de notas ---
         panel_notas = QVBoxLayout()
@@ -632,6 +686,11 @@ class AsistenteMain(QMainWindow):
         btn_del.clicked.connect(self.eliminar_nota_desde_gui)
         self.btn_enviar.clicked.connect(self.enviar_comando_escrito)
         self.input_cmd.returnPressed.connect(self.enviar_comando_escrito)
+        # Toggle de ayuda
+        try:
+            self.btn_help.clicked.connect(self._toggle_help)
+        except Exception:
+            pass
 
         # Inicializar combos/listas
         self.cargar_combo_carpetas()
@@ -647,6 +706,51 @@ class AsistenteMain(QMainWindow):
         main_layout.addLayout(panel_chat, 2)
         main_layout.addLayout(panel_notas, 1)
         self.setCentralWidget(central)
+
+    def cerrar_aplicacion(self) -> None:
+        """Cierra toda la aplicación (dispara closeEvent para limpieza)."""
+        try:
+            self.close()
+        except Exception:
+            from PyQt5.QtWidgets import QApplication
+            try:
+                QApplication.instance().quit()
+            except Exception:
+                pass
+
+    def _build_help_html(self) -> str:
+        return (
+            "<h3 style='color:#0ff;margin:0 0 6px 0;'>Comandos disponibles</h3>"
+            "<p style='margin:6px 0;'>Puedes usarlos por voz o escritos en el chat.</p>"
+            "<ul>"
+            "<li><b>Ayuda</b>: /ayuda</li>"
+            "<li><b>Hora</b>: ¿qué hora es?</li>"
+            "<li><b>Buscar en Google</b>: busca &lt;consulta&gt;</li>"
+            "<li><b>Según Internet</b>: según internet &lt;pregunta&gt; | qué es &lt;tema&gt;</li>"
+            "<li><b>Abrir apps</b>: abrir calculadora | bloc de notas | navegador</li>"
+            "<li><b>Música</b>: reproduce música | pon música</li>"
+            "<li><b>Calendario</b>: abrir calendario</li>"
+            "<li><b>Consultar eventos</b>: qué tengo hoy | qué tengo semana</li>"
+            "<li><b>Crear evento</b>: crear evento &lt;nombre&gt; el YYYY-MM-DD [a las HH:MM]</li>"
+            "<li><b>Notas</b>: crear nota &lt;título&gt; [en &lt;carpeta&gt;] | leer nota &lt;título&gt; | eliminar nota &lt;título&gt; | buscar nota &lt;palabra&gt; [en &lt;carpeta&gt;] | crear carpeta &lt;nombre&gt;</li>"
+            "<li><b>PC</b>: apagar el equipo | reiniciar el equipo</li>"
+            "</ul>"
+            "<h4 style='color:#8be9ff;margin:10px 0 6px 0;'>Consejos</h4>"
+            "<ul>"
+            "<li>Activa el micrófono con la barra espaciadora.</li>"
+            "<li>En el calendario, doble clic marca un evento como hecho/pendiente.</li>"
+            "<li>Desde el calendario puedes seleccionar varios y cambiar su estado.</li>"
+            "</ul>"
+        )
+
+    def _toggle_help(self) -> None:
+        try:
+            visible = self.help_container.isVisible()
+            if not visible:
+                self.help_label.setText(self._build_help_html())
+            self.help_container.setVisible(not visible)
+        except Exception:
+            pass
 
     # ===== Recordatorios de eventos =====
     def _iniciar_recordatorios(self) -> None:
