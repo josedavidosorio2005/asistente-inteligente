@@ -40,6 +40,11 @@ SCHEMA = [
         updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(title, folder)
     )""",
+    # Configuración genérica (clave/valor JSON serializado)
+    """CREATE TABLE IF NOT EXISTS config (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+    )""",
 ]
 
 def get_conn() -> sqlite3.Connection:
@@ -82,10 +87,15 @@ def get_conn() -> sqlite3.Connection:
                     }, ensure_ascii=False, indent=2), encoding='utf-8')
                 except Exception:
                     pass
+            # Migrar config.json si existe y tabla aún vacía
+            try:
+                _migrate_config_json(_conn)
+            except Exception:
+                pass
             # Asegurar que todas las tablas existen (por fallos anteriores de creación)
             try:
                 existentes = {r[0] for r in _conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-                if 'events' not in existentes or 'notes' not in existentes:
+                if 'events' not in existentes or 'notes' not in existentes or 'config' not in existentes:
                     for ddl in SCHEMA:
                         _conn.execute(ddl)
                     _conn.commit()
@@ -194,6 +204,80 @@ def consume_migration_message() -> str | None:
     except Exception:
         pass
     return msg
+
+# === Configuración (clave/valor) ===
+
+CONFIG_JSON_PATH = DATA_DIR / 'config.json'
+
+def _migrate_config_json(conn: sqlite3.Connection) -> None:
+    """Migra config.json (si existe) a la tabla config.
+
+    Se realiza solo si la tabla config está vacía.
+    Luego renombra el archivo a config.legacy.json para no re‑migrar.
+    """
+    try:
+        cur = conn.execute("SELECT COUNT(*) FROM config")
+        if cur.fetchone()[0] > 0:
+            return  # Ya hay datos
+    except Exception:
+        return
+    if not CONFIG_JSON_PATH.exists():
+        return
+    try:
+        data = json.loads(CONFIG_JSON_PATH.read_text(encoding='utf-8'))
+        if isinstance(data, dict):
+            for k, v in data.items():
+                try:
+                    conn.execute("INSERT OR REPLACE INTO config(key,value) VALUES (?,?)", (k, json.dumps(v, ensure_ascii=False)))
+                except Exception:
+                    continue
+            conn.commit()
+        # Renombrar
+        legacy = CONFIG_JSON_PATH.with_suffix('.legacy.json')
+        if not legacy.exists():
+            try:
+                CONFIG_JSON_PATH.rename(legacy)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+def config_set(key: str, value) -> bool:
+    conn = get_conn()
+    try:
+        conn.execute("INSERT OR REPLACE INTO config(key,value) VALUES (?,?)", (key, json.dumps(value, ensure_ascii=False)))
+        conn.commit()
+        return True
+    except Exception:
+        return False
+
+def config_get(key: str, default=None):
+    conn = get_conn()
+    try:
+        cur = conn.execute("SELECT value FROM config WHERE key=?", (key,))
+        row = cur.fetchone()
+        if not row:
+            return default
+        try:
+            return json.loads(row[0])
+        except Exception:
+            return row[0]
+    except Exception:
+        return default
+
+def config_load_all() -> dict:
+    conn = get_conn()
+    result = {}
+    try:
+        cur = conn.execute("SELECT key, value FROM config")
+        for k, v in cur.fetchall():
+            try:
+                result[k] = json.loads(v)
+            except Exception:
+                result[k] = v
+    except Exception:
+        pass
+    return result
 
 # === API Eventos ===
 

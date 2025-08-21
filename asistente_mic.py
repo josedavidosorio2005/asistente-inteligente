@@ -138,6 +138,7 @@ class AsistenteMain(QMainWindow):
         """Reproduce TTS en un hilo para no bloquear la UI."""
         def _speak():
             try:
+                # hablar() leerá preferencias (idioma, velocidad, género) desde config
                 hablar(texto)
             except Exception:
                 pass
@@ -679,6 +680,53 @@ class AsistenteMain(QMainWindow):
         build_device_card("Dispositivo de entrada", 'btn_input_device', lambda: self._show_device_menu('input'))
         build_device_card("Dispositivo de salida", 'btn_output_device', lambda: self._show_device_menu('output'))
 
+        # Preferencias de voz
+        voz_card = QWidget(); voz_card.setObjectName("DeviceCard")
+        vvoz = QVBoxLayout(voz_card); vvoz.setContentsMargins(14,10,14,10); vvoz.setSpacing(6)
+        lblv = QLabel("Voz (idioma / velocidad / género)"); lblv.setStyleSheet("color:#fff;font-size:13px;font-weight:600;")
+        vvoz.addWidget(lblv)
+        from PyQt5.QtWidgets import QHBoxLayout, QComboBox
+        hvoz = QHBoxLayout(); hvoz.setSpacing(6); hvoz.setContentsMargins(0,0,0,0)
+        self.combo_voice_lang = QComboBox(); self.combo_voice_lang.setStyleSheet("background:rgba(0,0,0,0.35);color:#8be9ff;border:1px solid #0ff;border-radius:6px;padding:2px 6px;font-size:12px;")
+        for code,label in [("es","Español"),("en","Inglés"),("fr","Francés"),("de","Alemán"),("it","Italiano")]:
+            self.combo_voice_lang.addItem(label, code)
+        self.combo_voice_speed = QComboBox(); self.combo_voice_speed.setStyleSheet("background:rgba(0,0,0,0.35);color:#8be9ff;border:1px solid #0ff;border-radius:6px;padding:2px 6px;font-size:12px;")
+        self.combo_voice_speed.addItems(["lento","normal","rapido"])
+        self.combo_voice_gender = QComboBox(); self.combo_voice_gender.setStyleSheet("background:rgba(0,0,0,0.35);color:#8be9ff;border:1px solid #0ff;border-radius:6px;padding:2px 6px;font-size:12px;")
+        self.combo_voice_gender.addItems(["femenina","masculina"])
+        hvoz.addWidget(self.combo_voice_lang,1); hvoz.addWidget(self.combo_voice_speed,1); hvoz.addWidget(self.combo_voice_gender,1)
+        vvoz.addLayout(hvoz)
+        cfg_lay.addWidget(voz_card)
+
+        # Tema UI
+        theme_card = QWidget(); theme_card.setObjectName("DeviceCard")
+        vth = QVBoxLayout(theme_card); vth.setContentsMargins(14,10,14,10); vth.setSpacing(6)
+        lblt = QLabel("Tema de interfaz"); lblt.setStyleSheet("color:#fff;font-size:13px;font-weight:600;")
+        vth.addWidget(lblt)
+        self.combo_ui_theme = QComboBox(); self.combo_ui_theme.setStyleSheet("background:rgba(0,0,0,0.35);color:#8be9ff;border:1px solid #0ff;border-radius:6px;padding:2px 6px;font-size:12px;")
+        self.combo_ui_theme.addItems(["neon","claro","oscuro"])
+        vth.addWidget(self.combo_ui_theme)
+        cfg_lay.addWidget(theme_card)
+
+        # Señales de cambio
+        def _persist_voice():
+            from src import config_store as _cs
+            cfg = _cs.load_config()
+            cfg['voice_lang'] = self.combo_voice_lang.currentData()
+            cfg['voice_speed'] = self.combo_voice_speed.currentText()
+            cfg['voice_gender'] = self.combo_voice_gender.currentText()
+            _cs.save_config(cfg)
+        def _persist_theme():
+            from src import config_store as _cs
+            cfg = _cs.load_config()
+            cfg['ui_theme'] = self.combo_ui_theme.currentText()
+            _cs.save_config(cfg)
+            self._aplicar_tema(cfg['ui_theme'])
+        self.combo_voice_lang.currentIndexChanged.connect(_persist_voice)
+        self.combo_voice_speed.currentIndexChanged.connect(_persist_voice)
+        self.combo_voice_gender.currentIndexChanged.connect(_persist_voice)
+        self.combo_ui_theme.currentIndexChanged.connect(_persist_theme)
+
         hint = QLabel("Los cambios se guardan al seleccionar un dispositivo.")
         hint.setStyleSheet("color:#6ac7d8;font-size:11px;margin-top:4px;")
         cfg_lay.addWidget(hint)
@@ -852,6 +900,31 @@ class AsistenteMain(QMainWindow):
         cfg = config_store.load_config()
         self.config_mic_index = cfg.get('mic_index')
         self._actualizar_label_mic()
+        # Prefs voz
+        try:
+            lang = cfg.get('voice_lang','es')
+            idx = self.combo_voice_lang.findData(lang)
+            if idx >= 0: self.combo_voice_lang.setCurrentIndex(idx)
+            for combo_key, combo_widget in [('voice_speed', self.combo_voice_speed), ('voice_gender', self.combo_voice_gender)]:
+                val = cfg.get(combo_key)
+                pos = combo_widget.findText(val) if val else -1
+                if pos >= 0: combo_widget.setCurrentIndex(pos)
+            # Tema
+            theme = cfg.get('ui_theme','neon')
+            tpos = self.combo_ui_theme.findText(theme)
+            if tpos >= 0: self.combo_ui_theme.setCurrentIndex(tpos)
+            self._aplicar_tema(theme)
+        except Exception:
+            pass
+
+    def _aplicar_tema(self, theme: str):
+        base = {
+            'neon': "background: qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 #111, stop:1 #444);",
+            'oscuro': "background:#1a1d1f;",
+            'claro': "background:#f2f4f7;"
+        }.get(theme, '')
+        self.setStyleSheet(base)
+        # Ajustes mínimos (placeholder para ampliar)
 
     def _actualizar_label_mic(self, preview_index=None):
         idx = preview_index if preview_index is not None else getattr(self, 'config_mic_index', None)
@@ -998,7 +1071,6 @@ class AsistenteMain(QMainWindow):
             import config_store  # type: ignore
         cfg = config_store.load_config()
         cfg['mic_index'] = self.config_mic_index
-        cfg['output_device_index'] = None
         config_store.save_config(cfg)
 
     def _toggle_config(self, force_close=False):

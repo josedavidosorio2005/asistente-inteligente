@@ -1,43 +1,46 @@
-"""Almacenamiento sencillo de configuración de la aplicación.
+"""Fachada de compatibilidad para configuración usando la base de datos.
 
-Guarda:
-  - mic_index: índice del micrófono seleccionado (int o None)
-  - output_device_index: índice del dispositivo de salida (int o None)
+Se mantiene la misma interfaz pública (load_config/save_config) pero ahora
+los valores se guardan en la tabla `config` de SQLite (ver db.config_*).
 
-Los índices coinciden con el orden enumerado al mostrar dispositivos.
+Claves reconocidas:
+ - mic_index
+ - output_device_index
+Se aceptan valores adicionales y se devuelven al cargar.
 """
 from __future__ import annotations
-import json
-from pathlib import Path
 from typing import Any, Dict
 
-BASE_DIR = Path(__file__).resolve().parent.parent
-DATA_DIR = BASE_DIR / 'data'
-DATA_DIR.mkdir(exist_ok=True)
-CFG_PATH = DATA_DIR / 'config.json'
+try:
+    from src import db  # tipo: ignore
+except Exception:  # pragma: no cover
+    import db  # type: ignore
 
 DEFAULT_CFG: Dict[str, Any] = {
-    "mic_index": None,
-    "output_device_index": None,
+    'mic_index': None,
+    'output_device_index': None,
+    'voice_lang': 'es',
+    'voice_speed': 'normal',  # lento | normal | rapido
+    'voice_gender': 'femenina',  # femenina | masculina (placeholder)
+    'ui_theme': 'neon',  # neon | claro | oscuro
 }
 
 def load_config() -> Dict[str, Any]:
+    data = DEFAULT_CFG.copy()
     try:
-        if CFG_PATH.exists():
-            data = json.loads(CFG_PATH.read_text(encoding='utf-8'))
-            merged = DEFAULT_CFG.copy()
-            for k in DEFAULT_CFG:
-                if k in data:
-                    merged[k] = data[k]
-            return merged
+        all_cfg = db.config_load_all()
+        for k, v in all_cfg.items():
+            data[k] = v
     except Exception:
         pass
-    return DEFAULT_CFG.copy()
+    return data
 
 def save_config(cfg: Dict[str, Any]) -> bool:
-    try:
-        out = {k: cfg.get(k) for k in DEFAULT_CFG.keys()}
-        CFG_PATH.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding='utf-8')
-        return True
-    except Exception:
-        return False
+    ok = True
+    for k, v in cfg.items():
+        try:
+            if not db.config_set(k, v):
+                ok = False
+        except Exception:
+            ok = False
+    return ok
