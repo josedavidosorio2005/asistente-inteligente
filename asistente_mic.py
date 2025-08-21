@@ -245,19 +245,29 @@ class AsistenteMain(QMainWindow):
             from datetime import datetime
             hora = datetime.now().strftime('%H:%M')
             respuesta = f"Son las {hora}."
-        # Buscar en Internet (modo clásico Google)
+        # Buscar en Internet (resumen en español y/o Google)
         elif "busca" in texto_l or "buscar" in texto_l:
-            import webbrowser
             import re
-            patron = r"busca(r)? (en google )?(.*)"
+            patron = r"busca(r)?( en google)? (.*)"
             m = re.search(patron, texto_l)
             if m and m.group(3):
                 query = m.group(3).strip()
-                url = f"https://www.google.com/search?q={query.replace(' ','+')}"
-                webbrowser.open(url)
-                respuesta = f"Buscando '{query}' en Google."
+                try:
+                    from web_search import search_and_answer
+                    if m.group(2):
+                        # Usuario pidió explícitamente Google
+                        respuesta = search_and_answer(query, max_results=5, provider="google")
+                    else:
+                        # Resumen rápido en español (DuckDuckGo)
+                        respuesta = search_and_answer(query, max_results=3)
+                except Exception:
+                    # Fallback: abrir Google si no hay dependencia
+                    import webbrowser
+                    url = f"https://www.google.com/search?q={query.replace(' ','+')}"
+                    webbrowser.open(url)
+                    respuesta = f"Buscando en Google: {query} (abre en el navegador)."
             else:
-                respuesta = "¿Qué quieres que busque en Google?"
+                respuesta = "¿Qué quieres buscar? Di: 'busca en google ...' o 'busca ...'"
         # Preguntas con respuesta desde Internet (búsqueda + resumen)
         elif any(p in texto_l for p in [
             "según internet", "segun internet", "qué es", "que es", "quién es", "quien es",
