@@ -22,6 +22,8 @@ DEFAULT_CFG: Dict[str, Any] = {
     'voice_lang': 'es',
     'voice_speed': 'normal',  # lento | normal | rapido
     'voice_gender': 'femenina',  # femenina | masculina (placeholder)
+    'voice_provider': 'gtts',  # gtts | edge
+    'voice_name': None,  # nombre específico motor (Edge)
     'ui_theme': 'neon',  # neon | claro | oscuro
 }
 

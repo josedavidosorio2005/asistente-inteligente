@@ -682,11 +682,23 @@ class AsistenteMain(QMainWindow):
 
         # Preferencias de voz
         voz_card = QWidget(); voz_card.setObjectName("DeviceCard")
-        vvoz = QVBoxLayout(voz_card); vvoz.setContentsMargins(14,10,14,10); vvoz.setSpacing(6)
-        lblv = QLabel("Voz (idioma / velocidad / género)"); lblv.setStyleSheet("color:#fff;font-size:13px;font-weight:600;")
+        vvoz = QVBoxLayout(voz_card)
+        vvoz.setContentsMargins(14,10,14,10)
+        vvoz.setSpacing(6)
+        lblv = QLabel("Voz (motor / idioma / velocidad / género)")
+        lblv.setStyleSheet("color:#fff;font-size:13px;font-weight:600;")
         vvoz.addWidget(lblv)
-    # (Import interno eliminado para evitar sombrear símbolos ya importados arriba)
         hvoz = QHBoxLayout(); hvoz.setSpacing(6); hvoz.setContentsMargins(0,0,0,0)
+        self.combo_voice_provider = QComboBox()
+        self.combo_voice_provider.setStyleSheet("background:rgba(0,0,0,0.35);color:#8be9ff;border:1px solid #0ff;border-radius:6px;padding:2px 6px;font-size:12px;")
+        self.combo_voice_provider.addItems(["gtts","edge"])
+        # Ocultar edge si no disponible
+        try:
+            import edge_tts  # type: ignore  # noqa: F401
+        except Exception:
+            idx_edge = self.combo_voice_provider.findText("edge")
+            if idx_edge >= 0:
+                self.combo_voice_provider.removeItem(idx_edge)
         self.combo_voice_lang = QComboBox(); self.combo_voice_lang.setStyleSheet("background:rgba(0,0,0,0.35);color:#8be9ff;border:1px solid #0ff;border-radius:6px;padding:2px 6px;font-size:12px;")
         for code,label in [("es","Español"),("en","Inglés"),("fr","Francés"),("de","Alemán"),("it","Italiano")]:
             self.combo_voice_lang.addItem(label, code)
@@ -694,14 +706,22 @@ class AsistenteMain(QMainWindow):
         self.combo_voice_speed.addItems(["lento","normal","rapido"])
         self.combo_voice_gender = QComboBox(); self.combo_voice_gender.setStyleSheet("background:rgba(0,0,0,0.35);color:#8be9ff;border:1px solid #0ff;border-radius:6px;padding:2px 6px;font-size:12px;")
         self.combo_voice_gender.addItems(["femenina","masculina"])
-        hvoz.addWidget(self.combo_voice_lang,1); hvoz.addWidget(self.combo_voice_speed,1); hvoz.addWidget(self.combo_voice_gender,1)
+        hvoz.addWidget(self.combo_voice_provider,1)
+        hvoz.addWidget(self.combo_voice_lang,1)
+        hvoz.addWidget(self.combo_voice_speed,1)
+        hvoz.addWidget(self.combo_voice_gender,1)
         vvoz.addLayout(hvoz)
+        self.combo_voice_name = QComboBox(); self.combo_voice_name.setStyleSheet("background:rgba(0,0,0,0.35);color:#8be9ff;border:1px solid #0ff;border-radius:6px;padding:2px 6px;font-size:12px;")
+        self.combo_voice_name.setVisible(False)
+        vvoz.addWidget(self.combo_voice_name)
         cfg_lay.addWidget(voz_card)
-
         # Tema UI
         theme_card = QWidget(); theme_card.setObjectName("DeviceCard")
-        vth = QVBoxLayout(theme_card); vth.setContentsMargins(14,10,14,10); vth.setSpacing(6)
-        lblt = QLabel("Tema de interfaz"); lblt.setStyleSheet("color:#fff;font-size:13px;font-weight:600;")
+        vth = QVBoxLayout(theme_card)
+        vth.setContentsMargins(14,10,14,10)
+        vth.setSpacing(6)
+        lblt = QLabel("Tema de interfaz")
+        lblt.setStyleSheet("color:#fff;font-size:13px;font-weight:600;")
         vth.addWidget(lblt)
         self.combo_ui_theme = QComboBox(); self.combo_ui_theme.setStyleSheet("background:rgba(0,0,0,0.35);color:#8be9ff;border:1px solid #0ff;border-radius:6px;padding:2px 6px;font-size:12px;")
         self.combo_ui_theme.addItems(["neon","claro","oscuro"])
@@ -712,19 +732,68 @@ class AsistenteMain(QMainWindow):
         def _persist_voice():
             from src import config_store as _cs
             cfg = _cs.load_config()
+            cfg['voice_provider'] = self.combo_voice_provider.currentText()
             cfg['voice_lang'] = self.combo_voice_lang.currentData()
             cfg['voice_speed'] = self.combo_voice_speed.currentText()
             cfg['voice_gender'] = self.combo_voice_gender.currentText()
+            if self.combo_voice_name.isVisible():
+                cfg['voice_name'] = self.combo_voice_name.currentData() or self.combo_voice_name.currentText()
             _cs.save_config(cfg)
+        def _load_edge_voices():
+            prov = self.combo_voice_provider.currentText()
+            self.combo_voice_name.clear()
+            self.combo_voice_name.setVisible(prov == 'edge')
+            if prov != 'edge':
+                _persist_voice(); return
+            import threading
+            def job():
+                try:
+                    import asyncio, edge_tts  # type: ignore
+                except Exception:
+                    return
+                async def gather():
+                    try:
+                        voices = await edge_tts.list_voices()
+                    except Exception:
+                        voices = []
+                    return voices
+                try:
+                    voices = asyncio.run(gather())
+                except Exception:
+                    voices = []
+                lang_sel = self.combo_voice_lang.currentData()
+                gender_sel = self.combo_voice_gender.currentText().lower()
+                filtered = []
+                for v in voices:
+                    if lang_sel.lower() in v.get('Locale','').lower() and gender_sel.startswith(v.get('Gender','').lower()[:1]):
+                        filtered.append(v)
+                if not filtered:
+                    filtered = voices[:20]
+                def apply():
+                    self.combo_voice_name.blockSignals(True)
+                    for v in filtered:
+                        self.combo_voice_name.addItem(v.get('Name'), v.get('Name'))
+                    self.combo_voice_name.blockSignals(False)
+                    _persist_voice()
+                QTimer.singleShot(0, apply)
+            threading.Thread(target=job, daemon=True).start()
         def _persist_theme():
             from src import config_store as _cs
             cfg = _cs.load_config()
             cfg['ui_theme'] = self.combo_ui_theme.currentText()
             _cs.save_config(cfg)
             self._aplicar_tema(cfg['ui_theme'])
-        self.combo_voice_lang.currentIndexChanged.connect(_persist_voice)
+        def _provider_changed():
+            _load_edge_voices()
+        def _voice_lang_or_gender_changed():
+            if self.combo_voice_provider.currentText() == 'edge':
+                _load_edge_voices()
+            _persist_voice()
+        self.combo_voice_provider.currentIndexChanged.connect(_provider_changed)
+        self.combo_voice_lang.currentIndexChanged.connect(_voice_lang_or_gender_changed)
         self.combo_voice_speed.currentIndexChanged.connect(_persist_voice)
-        self.combo_voice_gender.currentIndexChanged.connect(_persist_voice)
+        self.combo_voice_gender.currentIndexChanged.connect(_voice_lang_or_gender_changed)
+        self.combo_voice_name.currentIndexChanged.connect(_persist_voice)
         self.combo_ui_theme.currentIndexChanged.connect(_persist_theme)
 
         hint = QLabel("Los cambios se guardan al seleccionar un dispositivo.")
@@ -903,12 +972,19 @@ class AsistenteMain(QMainWindow):
         # Prefs voz
         try:
             lang = cfg.get('voice_lang','es')
+            prov = cfg.get('voice_provider','gtts')
+            pidx = self.combo_voice_provider.findText(prov)
+            if pidx >= 0: self.combo_voice_provider.setCurrentIndex(pidx)
             idx = self.combo_voice_lang.findData(lang)
             if idx >= 0: self.combo_voice_lang.setCurrentIndex(idx)
             for combo_key, combo_widget in [('voice_speed', self.combo_voice_speed), ('voice_gender', self.combo_voice_gender)]:
                 val = cfg.get(combo_key)
                 pos = combo_widget.findText(val) if val else -1
                 if pos >= 0: combo_widget.setCurrentIndex(pos)
+            if prov == 'edge':
+                # disparar carga voces edge
+                QTimer.singleShot(100, lambda: None or self.combo_voice_provider.currentIndexChanged.emit(self.combo_voice_provider.currentIndex()))
+                # seleccionar voz previa si se carga luego (persistencia por nombre)
             # Tema
             theme = cfg.get('ui_theme','neon')
             tpos = self.combo_ui_theme.findText(theme)
