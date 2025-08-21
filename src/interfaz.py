@@ -1,8 +1,9 @@
-# interfaz.py
-# Interfaz de usuario y panel de control
+"""Módulo de consola para mostrar un panel simple (legacy)."""
 import os
 import json
-def mostrar_panel():
+
+
+def mostrar_panel() -> str:
     print("\n--- Panel de Control ---")
     eventos_path = os.path.join(os.path.dirname(__file__), '..', 'resumenes', 'eventos.json')
     if os.path.exists(eventos_path):
@@ -13,3 +14,4 @@ def mostrar_panel():
             print(f"- {ev['evento']} ({ev['fecha']})")
     else:
         print("No hay eventos registrados.")
+    return "Panel mostrado en consola."

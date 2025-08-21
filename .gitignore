@@ -1,11 +1,38 @@
+# Entorno y dependencias
 .venv/
+venv/
+ENV/
+*.egg-info/
 __pycache__/
 *.pyc
-*.mp3
-*.wav
-notas/
-credentials.json
-token.pickle
+
+# IDE/Editor
+.vscode/
+.idea/
+
+# Sistema/OS
 .DS_Store
 Thumbs.db
-.vscode/
+
+# Archivos temporales y cache
+*.log
+*.tmp
+*.temp
+*.mp3
+*.wav
+*.bak
+
+# Datos locales (se mantienen vacíos con .gitkeep)
+notas/*
+!notas/.gitkeep
+resumenes/*
+!resumenes/.gitkeep
+pantallazos/*
+!pantallazos/.gitkeep
+
+# Credenciales locales
+credentials.json
+token.pickle
+
+# Salidas varias
+respuesta.mp3

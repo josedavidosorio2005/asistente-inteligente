@@ -1,10 +1,15 @@
+"""Widget de calendario con listado/alta de eventos locales.
+
+Persiste en el JSON apuntado por `eventos_path`.
+"""
 from PyQt5.QtWidgets import QWidget, QCalendarWidget, QVBoxLayout, QLabel, QListWidget, QPushButton, QDialog, QLineEdit, QHBoxLayout
 from PyQt5.QtCore import QDate
 import os
 import json
 
+
 class CalendarioEventos(QWidget):
-    def __init__(self, eventos_path, parent=None):
+    def __init__(self, eventos_path: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.eventos_path = eventos_path
         self.setWindowTitle("Calendario de eventos")
@@ -27,7 +32,7 @@ class CalendarioEventos(QWidget):
         self.setLayout(layout)
         self.mostrar_eventos_dia()
 
-    def crear_evento_en_fecha(self):
+    def crear_evento_en_fecha(self) -> None:
         fecha = self.calendario.selectedDate().toString('yyyy-MM-dd')
         dlg = QDialog(self)
         dlg.setWindowTitle(f"Nuevo evento para {fecha}")
@@ -58,13 +63,13 @@ class CalendarioEventos(QWidget):
         btn_cancel.clicked.connect(dlg.reject)
         dlg.exec_()
 
-    def cargar_eventos(self):
+    def cargar_eventos(self) -> list[dict]:
         if not os.path.exists(self.eventos_path):
             return []
         with open(self.eventos_path, 'r', encoding='utf-8') as f:
             return json.load(f)
 
-    def mostrar_eventos_dia(self):
+    def mostrar_eventos_dia(self) -> None:
         fecha = self.calendario.selectedDate().toString('yyyy-MM-dd')
         eventos = self.cargar_eventos()
         self.lista.clear()

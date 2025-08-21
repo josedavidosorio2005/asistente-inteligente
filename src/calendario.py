@@ -1,12 +1,17 @@
-# calendario.py
-# Módulo de gestión de eventos y recordatorios
+"""Gestión sencilla de eventos y recordatorios.
+
+Persiste en `resumenes/eventos.json`.
+"""
+from __future__ import annotations
 import json
 import os
+from datetime import datetime, timedelta
+
 EVENTOS_PATH = os.path.join(os.path.dirname(__file__), '..', 'resumenes', 'eventos.json')
 
 
-def crear_evento(evento, fecha):
-    """Crea un evento. Devuelve mensaje de estado."""
+def crear_evento(evento: str, fecha: str) -> str:
+    """Crea un evento con fecha ISO (YYYY-MM-DD). Devuelve mensaje de estado."""
     if os.path.exists(EVENTOS_PATH):
         with open(EVENTOS_PATH, 'r', encoding='utf-8') as f:
             eventos = json.load(f)
@@ -17,9 +22,11 @@ def crear_evento(evento, fecha):
         json.dump(eventos, f, ensure_ascii=False, indent=2)
     return "Evento creado."
 # Consulta eventos por día o semana
-from datetime import datetime, timedelta
-def consultar_eventos(modo):
-    """Devuelve lista de eventos según el modo ('hoy' o 'semana') y mensaje de estado."""
+def consultar_eventos(modo: str) -> tuple[list[dict], str]:
+    """Consulta eventos por modo ('hoy' o 'semana').
+
+    Retorna una tupla: (lista_eventos, mensaje_humano).
+    """
     if not os.path.exists(EVENTOS_PATH):
         return [], "No hay eventos guardados."
     with open(EVENTOS_PATH, 'r', encoding='utf-8') as f:
@@ -39,7 +46,7 @@ def consultar_eventos(modo):
         else:
             return [], "No tienes eventos para esta semana."
 
-def editar_evento(idx, nuevo_evento, nueva_fecha):
+def editar_evento(idx: int, nuevo_evento: str, nueva_fecha: str) -> str:
     """Edita un evento por índice. Devuelve mensaje de estado."""
     if not os.path.exists(EVENTOS_PATH):
         return "No hay eventos para editar."
@@ -54,7 +61,7 @@ def editar_evento(idx, nuevo_evento, nueva_fecha):
     else:
         return "Índice no válido."
 
-def eliminar_evento(idx):
+def eliminar_evento(idx: int) -> str:
     """Elimina un evento por índice. Devuelve mensaje de estado."""
     if not os.path.exists(EVENTOS_PATH):
         return "No hay eventos para eliminar."

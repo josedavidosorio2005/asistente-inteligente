@@ -1,18 +1,17 @@
-
-
-
+# Legacy: flujo Tk/CLI con OCR y watchdog (reubicado desde src/asistente.py)
+import os, sys
+sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 
 import mss
 import numpy as np
 import cv2
-import sys
+import sys as _sys
 import requests
 import tempfile
 import pyttsx3
 import speech_recognition as sr
 import threading
 import tkinter as tk
-import os
 import json
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
@@ -29,8 +28,6 @@ def capturar_pantalla():
         img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
         return img
 
-# Extrae texto usando la API de OCR.space
-# Extrae texto usando la API de OCR.space
 # Extrae texto usando la API de OCR.space
 def extraer_texto(img):
     # Guardar imagen temporalmente
@@ -59,7 +56,6 @@ def filtrar_texto(texto):
     relevantes = []
     for linea in lineas:
         l = linea.strip()
-        # Ignora líneas vacías, menús comunes y palabras sueltas
         if not l or len(l) < 4:
             continue
         if l.lower() in ["archivo", "editar", "ver", "ir", "ejecutar", "selección", "ayuda", "main", "src"]:
@@ -69,8 +65,8 @@ def filtrar_texto(texto):
 
 # Guarda el resumen en una base de datos simple (JSON)
 def guardar_resumen(nombre_imagen, resumen):
-    db_path = os.path.join(os.path.dirname(__file__), '..', 'resumenes', 'resumenes.json')
-    db_path = os.path.abspath(db_path)
+    db_path = os.path.join(os.path.dirname(__file__), 'resumenes', 'resumenes.json')
+    db_path = os.path.abspath(os.path.join(os.path.dirname(__file__), 'resumenes', 'resumenes.json'))
     if os.path.exists(db_path):
         with open(db_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
@@ -82,8 +78,7 @@ def guardar_resumen(nombre_imagen, resumen):
 
 # Consulta la base de datos de resúmenes por palabra clave
 def consultar_resumenes(palabra):
-    db_path = os.path.join(os.path.dirname(__file__), '..', 'resumenes', 'resumenes.json')
-    db_path = os.path.abspath(db_path)
+    db_path = os.path.abspath(os.path.join(os.path.dirname(__file__), 'resumenes', 'resumenes.json'))
     if not os.path.exists(db_path):
         print("No hay resúmenes guardados.")
         return
@@ -112,7 +107,6 @@ def dictar_texto(texto, voz_natural=True):
             return
         except Exception as e:
             print(f"[ERROR] Voz natural falló, usando voz estándar. {e}")
-    # Fallback a voz estándar
     engine = pyttsx3.init()
     engine.setProperty('rate', 160)
     engine.say(texto)
@@ -132,7 +126,6 @@ def escuchar_orden():
     except Exception:
         pass
     return False
-
 
 # Ventana flotante con recuadro rojo
 class OverlayRedBox(threading.Thread):
@@ -160,7 +153,6 @@ class OverlayRedBox(threading.Thread):
     def stop(self):
         self._stop.set()
 
-
 # Handler para procesar nuevas imágenes en la carpeta
 class PantallazoHandler(FileSystemEventHandler):
     def on_created(self, event):
@@ -183,10 +175,8 @@ class PantallazoHandler(FileSystemEventHandler):
                 print(f"[ERROR] Procesando imagen: {e}")
 
 def main():
-    carpeta = os.path.join(os.path.dirname(__file__), '..', 'pantallazos')
-    carpeta = os.path.abspath(carpeta)
+    carpeta = os.path.abspath(os.path.join(os.path.dirname(__file__), 'pantallazos'))
     print(f"Monitoreando la carpeta: {carpeta}\nSube o guarda aquí tus pantallazos para procesarlos automáticamente.")
-    # Procesar imágenes ya existentes al iniciar
     for archivo in os.listdir(carpeta):
         if archivo.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp')):
             ruta = os.path.join(carpeta, archivo)
@@ -234,6 +224,4 @@ def main():
         observer.join()
 
 if __name__ == "__main__":
-    # Legacy: el código real fue movido a 'legacy/asistente.py'
-    from legacy.asistente import main
     main()

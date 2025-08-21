@@ -1,0 +1,6 @@
+mss
+numpy
+opencv-python
+requests
+watchdog
+pyttsx3

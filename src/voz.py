@@ -1,11 +1,14 @@
-# voz.py
-# Módulo de reconocimiento de voz (ASR)
+"""Módulo de voz legado (ASR + TTS) usado como respaldo.
+
+Expuesto para compatibilidad: escuchar_comando, escuchar_comando_continuo, hablar.
+"""
 import speech_recognition as sr
 from gtts import gTTS
 from playsound import playsound
 import tempfile
+import os
 
-def escuchar_comando(max_reintentos=3, callback_estado=None):
+def escuchar_comando(max_reintentos: int = 3, callback_estado=None) -> str | None:
     r = sr.Recognizer()
     with sr.Microphone() as source:
         if callback_estado:
@@ -33,7 +36,7 @@ def escuchar_comando(max_reintentos=3, callback_estado=None):
         return None
 
 # Escucha continuamente hasta captar un comando válido
-def escuchar_comando_continuo(callback_estado=None):
+def escuchar_comando_continuo(callback_estado=None) -> str | None:
     if callback_estado:
         callback_estado("(Micrófono activo, di un comando...)")
     while True:
@@ -42,7 +45,8 @@ def escuchar_comando_continuo(callback_estado=None):
             return texto
 
 # Función para hablar cualquier texto (respuesta profesional)
-def hablar(texto, callback_estado=None):
+def hablar(texto: str, callback_estado=None) -> None:
+    tmp_mp3 = None
     try:
         tts = gTTS(text=texto, lang='es', slow=False)
         tmp_mp3 = tempfile.mktemp(suffix='.mp3')
@@ -51,3 +55,9 @@ def hablar(texto, callback_estado=None):
     except Exception as e:
         if callback_estado:
             callback_estado(f"[ERROR] No se pudo reproducir el audio: {e}")
+    finally:
+        if tmp_mp3 and os.path.exists(tmp_mp3):
+            try:
+                os.remove(tmp_mp3)
+            except Exception:
+                pass

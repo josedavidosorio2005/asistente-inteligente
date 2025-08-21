@@ -1,10 +1,12 @@
+"""Widget de fondo animado con partículas (decorativo)."""
 from PyQt5.QtWidgets import QWidget
 from PyQt5.QtCore import QTimer, QPointF, Qt
 from PyQt5.QtGui import QPainter, QColor, QBrush, QLinearGradient
 import random
 
+
 class Particula:
-    def __init__(self, ancho, alto):
+    def __init__(self, ancho: float, alto: float) -> None:
         self.x = random.uniform(0, ancho)
         self.y = random.uniform(0, alto)
         self.vx = random.uniform(-0.5, 0.5)
@@ -18,7 +20,7 @@ class Particula:
             QColor(255, 255, 0, 120)   # amarillo neón
         ]))
 
-    def mover(self, ancho, alto):
+    def mover(self, ancho: float, alto: float) -> None:
         self.x += self.vx
         self.y += self.vy
         if self.x < 0 or self.x > ancho:
@@ -27,7 +29,7 @@ class Particula:
             self.vy *= -1
 
 class FondoParticulas(QWidget):
-    def __init__(self, parent=None, n=40):
+    def __init__(self, parent: QWidget | None = None, n: int = 40) -> None:
         super().__init__(parent)
         self.setAttribute(Qt.WA_TransparentForMouseEvents)
         self.particulas = [Particula(self.width(), self.height()) for _ in range(n)]
@@ -35,17 +37,17 @@ class FondoParticulas(QWidget):
         self.timer.timeout.connect(self.animar)
         self.timer.start(30)
 
-    def resizeEvent(self, event):
+    def resizeEvent(self, event):  # type: ignore[override]
         for p in self.particulas:
             p.x = random.uniform(0, self.width())
             p.y = random.uniform(0, self.height())
 
-    def animar(self):
+    def animar(self) -> None:
         for p in self.particulas:
             p.mover(self.width(), self.height())
         self.update()
 
-    def paintEvent(self, event):
+    def paintEvent(self, event):  # type: ignore[override]
         painter = QPainter(self)
         rect = self.rect()
         # Fondo negro con degradado a gris
