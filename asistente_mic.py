@@ -351,6 +351,32 @@ class AsistenteMain(QMainWindow):
                     respuesta = f"No pude crear el evento: {e}"
             else:
                 respuesta = "Di: 'crear evento <nombre> el YYYY-MM-DD [a las HH:MM]'."
+        # Eliminar evento
+        elif "eliminar evento" in texto_l:
+            import re
+            patron = r"eliminar evento (.+?) (?:el|de) (\d{4}-\d{2}-\d{2})(?:\s+(?:a las\s+)?(\d{1,2}:\d{2}))?"
+            m = re.search(patron, texto_l)
+            if m:
+                titulo = m.group(1).strip()
+                fecha = m.group(2)
+                hora = (m.group(3) or '').strip() or None
+                if hora:
+                    try:
+                        h, mi = map(int, hora.split(':'))
+                        hora = f"{h:02d}:{mi:02d}"
+                    except Exception:
+                        pass
+                try:
+                    from calendario import eliminar_evento_por_datos
+                    eliminados = eliminar_evento_por_datos(titulo, fecha, hora)
+                    if eliminados:
+                        respuesta = f"Evento eliminado: {titulo} el {fecha}{' a las ' + hora if hora else ''}."
+                    else:
+                        respuesta = "No se encontró el evento para eliminar."
+                except Exception as e:
+                    respuesta = f"Error eliminando el evento: {e}"
+            else:
+                respuesta = "Di: 'eliminar evento <nombre> el YYYY-MM-DD [a las HH:MM]' para borrarlo."
         # Calendario: abrir calendario
         elif ("calendario" in texto_l) and ("abre" in texto_l or "abrir" in texto_l or "mostrar" in texto_l):
             try:
@@ -359,6 +385,32 @@ class AsistenteMain(QMainWindow):
                 accion_realizada = True
             except Exception as e:
                 respuesta = f"No se pudo abrir el calendario: {e}"
+        # Eliminar evento: "eliminar evento <titulo> el YYYY-MM-DD [a las HH:MM]"
+        elif "eliminar evento" in texto_l:
+            import re
+            patron = r"eliminar evento (.+?) el (\d{4}-\d{2}-\d{2})(?:\s+(?:a las\s+)?(\d{1,2}:\d{2}))?"
+            m = re.search(patron, texto_l)
+            if m:
+                titulo = m.group(1).strip()
+                fecha = m.group(2)
+                hora = (m.group(3) or '').strip() or None
+                if hora:
+                    try:
+                        h, mi = map(int, hora.split(':'))
+                        hora = f"{h:02d}:{mi:02d}"
+                    except Exception:
+                        pass
+                try:
+                    from calendario import eliminar_evento_por_datos
+                    eliminados = eliminar_evento_por_datos(titulo, fecha, hora)
+                    if eliminados:
+                        respuesta = f"Evento eliminado: {titulo} el {fecha}{' a las '+hora if hora else ''}."
+                    else:
+                        respuesta = "No se encontró el evento para eliminar."
+                except Exception as e:
+                    respuesta = f"No pude eliminar el evento: {e}"
+            else:
+                respuesta = "Formato: eliminar evento <titulo> el YYYY-MM-DD [a las HH:MM]"
         # Apagar o reiniciar PC
         elif "apaga" in texto_l or "apagar" in texto_l:
             respuesta = "Apagando el equipo."
@@ -1120,6 +1172,12 @@ class AsistenteMain(QMainWindow):
                     lambda titulo, fecha, hora, done: self.chat_signal.emit(
                         ("✔️ Evento completado: " if done else "↩️ Evento marcado como pendiente: ") +
                         f"{titulo} ({fecha}{' '+hora if hora else ''})",
+                        'sistema'
+                    )
+                )
+                calw.evento_eliminado.connect(
+                    lambda titulo, fecha, hora: self.chat_signal.emit(
+                        f"🗑️ Evento eliminado: {titulo} ({fecha}{' '+hora if hora else ''})",
                         'sistema'
                     )
                 )

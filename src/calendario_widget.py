@@ -13,8 +13,11 @@ import json
 
 
 class CalendarioEventos(QWidget):
-    # Señal: título, fecha, hora (str|None), completado(bool)
+    # Señales:
+    # evento_toggle_completado(titulo, fecha, hora, completado)
+    # evento_eliminado(titulo, fecha, hora)
     evento_toggle_completado = pyqtSignal(str, str, object, bool)
+    evento_eliminado = pyqtSignal(str, str, object)
     def __init__(self, eventos_path: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.eventos_path = eventos_path
@@ -82,6 +85,12 @@ class CalendarioEventos(QWidget):
         btn_crear = QPushButton("Crear evento en este día")
         btn_crear.clicked.connect(self.crear_evento_en_fecha)
         layout.addWidget(btn_crear)
+        btn_eliminar = QPushButton("Eliminar seleccionado(s)")
+        layout.addWidget(btn_eliminar)
+        try:
+            btn_eliminar.clicked.connect(self.eliminar_eventos_seleccion)
+        except Exception:
+            pass
         self.setLayout(layout)
         self.mostrar_eventos_dia()
 
@@ -249,3 +258,54 @@ class CalendarioEventos(QWidget):
             pass
         # Refrescar lista
         self.mostrar_eventos_dia()
+
+    def eliminar_eventos_seleccion(self) -> None:
+        """Elimina todos los eventos seleccionados (multi‑selección) y actualiza la lista al instante."""
+        items = [it for it in self.lista.selectedItems() if it.data(Qt.UserRole)]
+        if not items:
+            return
+        # Recolectar claves a eliminar
+        claves = []  # list[tuple(titulo, fecha, hora|None)]
+        for it in items:
+            data = it.data(Qt.UserRole) or {}
+            titulo = (data.get('evento') or '').strip()
+            fecha = (data.get('fecha') or '').strip()
+            hora = data.get('hora') or None
+            if titulo and fecha:
+                claves.append((titulo, fecha, hora))
+        if not claves:
+            return
+        # Cargar todos los eventos
+        eventos = self.cargar_eventos()
+        inicial = len(eventos)
+        # Filtrar
+        def coincide(ev, clave):
+            t, f, h = clave
+            if ev.get('evento') != t or ev.get('fecha') != f:
+                return False
+            if h is None:
+                return True if (ev.get('hora') is None or True) else True  # ignora hora
+            return (ev.get('hora') == h)
+        filtrados = [ev for ev in eventos if not any(coincide(ev, c) for c in claves)]
+        eliminados = inicial - len(filtrados)
+        if eliminados <= 0:
+            return
+        # Guardar
+        try:
+            with open(self.eventos_path, 'w', encoding='utf-8') as f:
+                json.dump(filtrados, f, ensure_ascii=False, indent=2)
+        except Exception:
+            return
+        # Emitir señal por cada eliminado
+        for (t, f, h) in claves:
+            try:
+                self.evento_eliminado.emit(t, f, h)
+            except Exception:
+                pass
+        # Actualizar UI: eliminar ítems seleccionados sin recargar todo para feedback inmediato
+        for it in items:
+            row = self.lista.row(it)
+            self.lista.takeItem(row)
+        # Si quedó vacía, mostrar mensaje
+        if self.lista.count() == 0:
+            self.lista.addItem("Sin eventos para este día")

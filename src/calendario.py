@@ -117,3 +117,27 @@ def marcar_evento_completado(evento: str, fecha: str, hora: str | None = None, c
         return cambiado
     except Exception:
         return False
+
+def eliminar_evento_por_datos(evento: str, fecha: str, hora: str | None = None) -> int:
+    """Elimina eventos que coincidan con (evento, fecha [, hora]).
+
+    Si hora es None elimina todos los que coincidan por título y fecha sin considerar hora.
+    Devuelve la cantidad eliminada.
+    """
+    if not os.path.exists(EVENTOS_PATH):
+        return 0
+    try:
+        with open(EVENTOS_PATH, 'r', encoding='utf-8') as f:
+            eventos = json.load(f)
+        inicial = len(eventos)
+        if hora is None:
+            eventos = [ev for ev in eventos if not (ev.get('evento') == evento and ev.get('fecha') == fecha)]
+        else:
+            eventos = [ev for ev in eventos if not (ev.get('evento') == evento and ev.get('fecha') == fecha and ev.get('hora') == hora)]
+        eliminados = inicial - len(eventos)
+        if eliminados:
+            with open(EVENTOS_PATH, 'w', encoding='utf-8') as f:
+                json.dump(eventos, f, ensure_ascii=False, indent=2)
+        return eliminados
+    except Exception:
+        return 0
