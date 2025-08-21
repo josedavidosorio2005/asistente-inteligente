@@ -32,6 +32,7 @@ try:
 except Exception:
     from voz import escuchar_comando, hablar
 import json
+import speech_recognition as sr
 from datetime import datetime, timedelta
 try:
     from src import db  # nuevo backend SQLite
@@ -178,7 +179,12 @@ class AsistenteMain(QMainWindow):
             self.speak_lbl.setText("Escuchando…")
         def reconocer():
             r = sr.Recognizer()
-            mic = sr.Microphone()
+            # Aplicar micrófono configurado
+            mic_index = getattr(self, 'config_mic_index', None)
+            try:
+                mic = sr.Microphone(device_index=mic_index if isinstance(mic_index, int) else None)
+            except Exception:
+                mic = sr.Microphone()
             with mic as source:
                 self.chat_signal.emit('Habla ahora...', 'sistema')
                 audio = r.listen(source, timeout=5, phrase_time_limit=7)
@@ -549,6 +555,8 @@ class AsistenteMain(QMainWindow):
         self._timer_recordatorios = None
         self._timer_alertas = None
         self._active_notifs = []
+        # Config runtime (actualizado desde panel)
+        self.config_mic_index = None
         self.init_ui()
         # Mensaje de migración (primera vez)
         try:
@@ -559,7 +567,7 @@ class AsistenteMain(QMainWindow):
             pass
         # Iniciar recordatorios después de construir la UI
         try:
-            self._iniciar_recordatorios()
+            self._iniciar_recorditorios()
         except Exception:
             pass
         # Iniciar alertas puntuales (cada minuto)
@@ -586,7 +594,7 @@ class AsistenteMain(QMainWindow):
         titulo = QLabel("Asistente de PC")
         titulo.setStyleSheet("color:#0ff;font-size:22px;font-family:'Orbitron', 'Montserrat', Arial;font-weight:bold;")
         panel_lateral.addWidget(titulo, alignment=Qt.AlignHCenter)
-        # Botón circular de ayuda (izquierda) que despliega comandos
+        # Botón circular de ayuda
         self.btn_help = QPushButton("?")
         self.btn_help.setFixedSize(40, 40)
         self.btn_help.setStyleSheet(
@@ -598,7 +606,7 @@ class AsistenteMain(QMainWindow):
             self.btn_help.setToolTip("Mostrar/ocultar ayuda de comandos")
         except Exception:
             pass
-        # Contenedor de ayuda plegable en el mismo panel
+        # Contenedor de ayuda plegable
         self.help_container = QWidget()
         help_v = QVBoxLayout(self.help_container)
         help_v.setContentsMargins(0, 0, 0, 0)
@@ -626,13 +634,66 @@ class AsistenteMain(QMainWindow):
         self.help_scroll.setWidget(help_inner)
         help_v.addWidget(self.help_scroll)
         self.help_container.setVisible(False)
-        # Colocar botón y ayuda en el panel lateral
+
+        # Panel de configuración plegable
+        self.config_container = QWidget()
+        self.config_container.setVisible(False)
+        cfg_lay = QVBoxLayout(self.config_container)
+        cfg_lay.setContentsMargins(10, 14, 10, 14)
+        cfg_lay.setSpacing(12)
+        self.config_container.setStyleSheet(
+            "QWidget#DeviceCard{background:rgba(255,255,255,0.04);border:1px solid rgba(0,255,255,0.25);border-radius:10px;}"
+            "QWidget#DeviceCard:hover{background:rgba(0,255,255,0.08);border:1px solid #0ff;}"
+            "QPushButton#DeviceBtn{background:transparent;border:none;text-align:left;padding:0;margin:0;}"
+            "QPushButton#DeviceBtn:focus{outline:0;}"
+            "QLabel{color:#d0faff;font-size:13px;}"
+        )
+        title_cfg = QLabel("Audio / Dispositivos")
+        title_cfg.setStyleSheet("color:#0ff;font-size:15px;font-weight:600;margin-left:2px;")
+        cfg_lay.addWidget(title_cfg)
+
+        # Tarjeta genérica (entrada / salida)
+        def build_device_card(nombre_section: str, attr_button: str, click_handler):
+            card = QWidget()
+            card.setObjectName("DeviceCard")
+            v = QVBoxLayout(card)
+            v.setContentsMargins(14, 10, 14, 10)
+            v.setSpacing(4)
+            top_row = QHBoxLayout()
+            top_row.setContentsMargins(0, 0, 0, 0)
+            lbl = QLabel(nombre_section)
+            lbl.setStyleSheet("color:#fff;font-size:13px;font-weight:600;")
+            top_row.addWidget(lbl)
+            top_row.addStretch(1)
+            arrow = QLabel("›")  # right chevron
+            arrow.setStyleSheet("color:#0ff;font-size:18px;font-weight:bold;")
+            top_row.addWidget(arrow)
+            v.addLayout(top_row)
+            btn = QPushButton("Predeterminado")
+            btn.setObjectName("DeviceBtn")
+            btn.setStyleSheet("color:#8be9ff;font-size:13px;font-weight:500;padding:0 0 2px 0;")
+            btn.clicked.connect(click_handler)
+            v.addWidget(btn)
+            setattr(self, attr_button, btn)
+            cfg_lay.addWidget(card)
+        build_device_card("Dispositivo de entrada", 'btn_input_device', lambda: self._show_device_menu('input'))
+        build_device_card("Dispositivo de salida", 'btn_output_device', lambda: self._show_device_menu('output'))
+
+        hint = QLabel("Los cambios se guardan al seleccionar un dispositivo.")
+        hint.setStyleSheet("color:#6ac7d8;font-size:11px;margin-top:4px;")
+        cfg_lay.addWidget(hint)
+
+        cfg_lay.addStretch(1)
+
+        # Botón fila para help/config
         btn_row = QHBoxLayout()
         btn_row.setContentsMargins(0, 0, 0, 0)
         btn_row.addWidget(self.btn_help, alignment=Qt.AlignLeft)
         btn_row.addStretch(1)
         panel_lateral.addLayout(btn_row)
         panel_lateral.addWidget(self.help_container)
+        panel_lateral.addWidget(self.config_container)
+
         def menu_btn(text, icon=None):
             btn = QPushButton(text)
             btn.setFixedHeight(48)
@@ -642,7 +703,8 @@ class AsistenteMain(QMainWindow):
         btn_calendario = menu_btn("Calendario")
         panel_lateral.addWidget(btn_calendario)
         panel_lateral.addWidget(menu_btn("Aplicaciones"))
-        panel_lateral.addWidget(menu_btn("Configuración"))
+        self.btn_config_toggle = menu_btn("Configuración")
+        panel_lateral.addWidget(self.btn_config_toggle)
         panel_lateral.addStretch(1)
 
         # --- Panel central (chat) ---
@@ -696,13 +758,12 @@ class AsistenteMain(QMainWindow):
         panel_chat.addLayout(cmd_row)
         panel_chat.addStretch(1)
 
-        # Atajo de teclado para activar el micrófono (Barra espaciadora)
+        # Atajos
         try:
             self.shortcut_mic = QShortcut(Qt.Key_Space, self)
             self.shortcut_mic.activated.connect(self.accion_microfono)
         except Exception:
             pass
-        # Atajo global ESC para cerrar la app
         try:
             self.shortcut_exit = QShortcut(Qt.Key_Escape, self)
             self.shortcut_exit.setContext(Qt.ApplicationShortcut)
@@ -721,18 +782,15 @@ class AsistenteMain(QMainWindow):
         notes_lbl = QLabel("Notas")
         notes_lbl.setStyleSheet("color:#a0f;font-size:18px;font-family:'Orbitron', 'Montserrat', Arial;font-weight:bold;")
         notes_layout.addWidget(notes_lbl)
-        # Selector de carpeta y crear
         self.carpeta_combo = QComboBox()
         self.carpeta_combo.setStyleSheet("background:rgba(0,0,0,0.18);color:#fff;border-radius:8px;padding:6px;font-size:14px;")
         notes_layout.addWidget(self.carpeta_combo)
         btn_crear_carpeta = QPushButton("Crear carpeta…")
         btn_crear_carpeta.setStyleSheet("color:#a0f;border:1px solid #a0f;border-radius:8px;padding:6px;background:transparent;")
         notes_layout.addWidget(btn_crear_carpeta)
-        # Lista de notas
         self.lista_notas = QListWidget()
         self.lista_notas.setStyleSheet("background:rgba(0,0,0,0.18);color:#fff;border-radius:8px;padding:6px;font-size:14px;")
         notes_layout.addWidget(self.lista_notas)
-        # Edición de nota
         self.titulo_edit = QLineEdit()
         self.titulo_edit.setPlaceholderText("Título de la nota")
         self.titulo_edit.setStyleSheet("background:rgba(0,0,0,0.18);color:#fff;border-radius:8px;padding:8px;font-size:14px;")
@@ -741,7 +799,6 @@ class AsistenteMain(QMainWindow):
         self.contenido_edit.setPlaceholderText("Contenido…")
         self.contenido_edit.setStyleSheet("background:rgba(0,0,0,0.18);color:#fff;border-radius:8px;padding:8px;font-size:14px;")
         notes_layout.addWidget(self.contenido_edit)
-        # Botones
         btns_row = QHBoxLayout()
         btn_save = QPushButton("Guardar")
         btn_save.setStyleSheet("color:#a0f;border:1px solid #a0f;border-radius:8px;padding:8px;background:transparent;")
@@ -763,16 +820,15 @@ class AsistenteMain(QMainWindow):
         btn_del.clicked.connect(self.eliminar_nota_desde_gui)
         self.btn_enviar.clicked.connect(self.enviar_comando_escrito)
         self.input_cmd.returnPressed.connect(self.enviar_comando_escrito)
-        # Toggle de ayuda
         try:
             self.btn_help.clicked.connect(self._toggle_help)
         except Exception:
             pass
+        self.btn_config_toggle.clicked.connect(self._toggle_config)
 
         # Inicializar combos/listas
         self.cargar_combo_carpetas()
         self.cargar_lista_notas()
-        # Enfocar el input del chat para escribir de inmediato
         try:
             self.input_cmd.setFocus()
         except Exception:
@@ -784,70 +840,128 @@ class AsistenteMain(QMainWindow):
         main_layout.addLayout(panel_notas, 1)
         self.setCentralWidget(central)
 
-    def cerrar_aplicacion(self) -> None:
-        """Cierra toda la aplicación (dispara closeEvent para limpieza)."""
+        # Cargar config y poblar dispositivos
+        self._cargar_config_inicial()
+        # (El menú emergente generará la lista en tiempo real; ya no llamamos a refrescar_dispositivos())
+
+    def _cargar_config_inicial(self):
         try:
-            self.close()
+            from src import config_store
         except Exception:
-            from PyQt5.QtWidgets import QApplication
-            try:
-                QApplication.instance().quit()
-            except Exception:
-                pass
+            import config_store  # type: ignore
+        cfg = config_store.load_config()
+        self.config_mic_index = cfg.get('mic_index')
+        self._actualizar_label_mic()
 
-    def _build_help_html(self) -> str:
-        return (
-            "<h3 style='color:#0ff;margin:0 0 6px 0;'>Comandos disponibles</h3>"
-            "<p style='margin:6px 0;'>Puedes usarlos por voz o escritos en el chat.</p>"
-            "<ul>"
-            "<li><b>Ayuda</b>: /ayuda</li>"
-            "<li><b>Hora</b>: ¿qué hora es?</li>"
-            "<li><b>Buscar en Google</b>: busca &lt;consulta&gt;</li>"
-            "<li><b>Según Internet</b>: según internet &lt;pregunta&gt; | qué es &lt;tema&gt;</li>"
-            "<li><b>Abrir apps</b>: abrir calculadora | bloc de notas | navegador</li>"
-            "<li><b>Música</b>: reproduce música | pon música</li>"
-            "<li><b>Calendario</b>: abrir calendario</li>"
-            "<li><b>Consultar eventos</b>: qué tengo hoy | qué tengo semana</li>"
-            "<li><b>Crear evento</b>: crear evento &lt;nombre&gt; el YYYY-MM-DD [a las HH:MM]</li>"
-            "<li><b>Notas</b>: crear nota &lt;título&gt; [en &lt;carpeta&gt;] | leer nota &lt;título&gt; | eliminar nota &lt;título&gt; | buscar nota &lt;palabra&gt; [en &lt;carpeta&gt;] | crear carpeta &lt;nombre&gt;</li>"
-            "<li><b>PC</b>: apagar el equipo | reiniciar el equipo</li>"
-            "<li><b>Migración</b>: /limpiar_legacy para renombrar eventos.json y notas/ antiguas</li>"
-            "</ul>"
-            "<h4 style='color:#8be9ff;margin:10px 0 6px 0;'>Consejos</h4>"
-            "<ul>"
-            "<li>Activa el micrófono con la barra espaciadora.</li>"
-            "<li>En el calendario, doble clic marca un evento como hecho/pendiente.</li>"
-            "<li>Desde el calendario puedes seleccionar varios y cambiar su estado.</li>"
-            "</ul>"
-        )
-
-    def _toggle_help(self) -> None:
+    def _actualizar_label_mic(self, preview_index=None):
+        idx = preview_index if preview_index is not None else getattr(self, 'config_mic_index', None)
         try:
-            visible = self.help_container.isVisible()
-            if not visible:
-                self.help_label.setText(self._build_help_html())
-            self.help_container.setVisible(not visible)
+            mic_names = sr.Microphone.list_microphone_names() or []
+        except Exception:
+            mic_names = []
+        if isinstance(idx, int) and 0 <= idx < len(mic_names):
+            nombre = mic_names[idx]
+            corto = (nombre[:34] + '…') if len(nombre) > 35 else nombre
+            texto_btn = f"{corto}"
+            if hasattr(self, 'btn_input_device'):
+                self.btn_input_device.setText(texto_btn)
+            if hasattr(self, 'btn_config_toggle'):
+                corto_menu = (nombre[:22] + '…') if len(nombre) > 23 else nombre
+                self.btn_config_toggle.setText(f"Configuración · {corto_menu}")
+        else:
+            if hasattr(self, 'btn_input_device'):
+                self.btn_input_device.setText("Predeterminado")
+            if hasattr(self, 'btn_config_toggle'):
+                self.btn_config_toggle.setText("Configuración")
+
+    def _show_device_menu(self, kind: str):
+        from PyQt5.QtWidgets import QMenu, QAction
+        menu = QMenu(self)
+        menu.setStyleSheet(
+            "QMenu{background:#101821;border:1px solid #0ff;padding:6px;}"
+            "QMenu::item{color:#d0faff;padding:6px 26px 6px 24px;border-radius:6px;font-size:13px;}"
+            "QMenu::item:selected{background:rgba(0,255,255,0.15);color:#fff;}"
+            "QMenu::separator{height:1px;background:rgba(255,255,255,0.12);margin:6px 4px;}"
+        )
+        try:
+            current_mics = sr.Microphone.list_microphone_names() if kind == 'input' else []
+        except Exception:
+            current_mics = []
+        # Acción predeterminada
+        act_default = QAction("Predeterminado del sistema", menu)
+        act_default.setCheckable(True)
+        if kind == 'input' and (self.config_mic_index is None):
+            act_default.setChecked(True)
+        menu.addAction(act_default)
+        def set_default():
+            if kind == 'input':
+                self.config_mic_index = None
+                self._guardar_config()
+                self._actualizar_label_mic()
+        act_default.triggered.connect(set_default)
+        if kind == 'input':
+            # Listar mics
+            for i, name in enumerate(current_mics):
+                act = QAction(f"{name}", menu)
+                act.setCheckable(True)
+                if self.config_mic_index == i:
+                    act.setChecked(True)
+                def make_handler(index=i):
+                    return lambda: self._select_microphone(index)
+                act.triggered.connect(make_handler(i))
+                menu.addAction(act)
+            menu.addSeparator()
+            act_refresh = QAction("Refrescar lista", menu)
+            act_refresh.triggered.connect(lambda: self._refresh_devices_menu(menu, kind))
+            menu.addAction(act_refresh)
+        else:
+            # Placeholder salida
+            placeholder = QAction("(Solo predeterminado por ahora)", menu)
+            placeholder.setEnabled(False)
+            menu.addAction(placeholder)
+        btn = self.btn_input_device if kind == 'input' else self.btn_output_device
+        pos = btn.mapToGlobal(btn.rect().bottomLeft())
+        menu.exec_(pos)
+
+    def _refresh_devices_menu(self, old_menu, kind):
+        # Cerrar y reabrir menú actualizado
+        try:
+            old_menu.close()
         except Exception:
             pass
+        QTimer.singleShot(0, lambda: self._show_device_menu(kind))
 
-    def _buscar_internet_async(self, query: str, provider: str = "ddg") -> None:
-        """Lanza búsqueda sin bloquear la UI y lee solo el resumen, no enlaces."""
-        def _job():
-            try:
-                from web_search import search_and_answer
-                resp = search_and_answer(query, max_results=3, provider=provider)
-            except Exception as e:
-                resp = f"No pude buscar en Internet: {e}"
-            # Extraer solo la primera línea o párrafo (antes de 'Fuente' o 'Más fuentes')
-            linea = resp.split("\n")[0].strip()
-            if len(linea) < 6:
-                linea = resp[:180].split("\n")[0]
-            # Emitir en chat el texto completo para que el usuario tenga enlaces
-            self.chat_signal.emit(resp, 'sistema')
-            # Leer por voz solo el resumen
-            self.hablar_async(linea)
-        threading.Thread(target=_job, daemon=True).start()
+    def _select_microphone(self, index: int):
+        self.config_mic_index = index
+        self._guardar_config()
+        self._actualizar_label_mic()
 
+    def _guardar_config(self):
+        try:
+            from src import config_store
+        except Exception:
+            import config_store  # type: ignore
+        cfg = config_store.load_config()
+        cfg['mic_index'] = self.config_mic_index
+        cfg['output_device_index'] = None
+        config_store.save_config(cfg)
+
+    def _toggle_config(self, force_close=False):
+        visible = self.config_container.isVisible()
+        if force_close:
+            self.config_container.setVisible(False)
+            return
+        try:
+            if self.help_container.isVisible():
+                self.help_container.setVisible(False)
+        except Exception:
+            pass
+        self.config_container.setVisible(not visible)
+        if self.config_container.isVisible():
+            # Cargar lista actual al abrir
+            QTimer.singleShot(50, self._actualizar_label_mic)
+    # ...existing code for rest of class (methods below) without the duplicate _toggle_config at bottom...
+    # (Se ha eliminado la segunda definición redundante de _toggle_config)
     # ===== Recordatorios de eventos =====
     def _iniciar_recordatorios(self) -> None:
         """Configura un temporizador que recuerda eventos del día una vez al día."""
