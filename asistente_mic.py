@@ -129,6 +129,15 @@ class AsistenteMain(QMainWindow):
         self.chat_layout.addWidget(msg)
         self.autoscroll_chat()
 
+    def hablar_async(self, texto: str) -> None:
+        """Reproduce TTS en un hilo para no bloquear la UI."""
+        def _speak():
+            try:
+                hablar(texto)
+            except Exception:
+                pass
+        threading.Thread(target=_speak, daemon=True).start()
+
     def sincronizar_con_drive(self, modo: str = 'ambos') -> None:
         """
         Sincroniza notas con Google Drive.
@@ -274,24 +283,17 @@ class AsistenteMain(QMainWindow):
             "cómo funciona", "como funciona", "definición de", "definicion de", "investiga",
             "busca en internet", "consulta en internet"
         ]):
-            try:
-                import re
-                # importar desde 'src' ya está en sys.path
-                from web_search import search_and_answer
-                # extraer consulta después de indicaciones comunes
-                query = texto_l
-                for kw in ["según internet", "segun internet", "busca en internet", "consulta en internet", "investiga"]:
-                    query = query.replace(kw, "").strip()
-                # limpiar prefijos tipo "qué es", "quién es"
-                query = re.sub(r"^(qué es|que es|quién es|quien es|cómo funciona|como funciona|definición de|definicion de)\s*", "", query)
-                if not query:
-                    query = texto
-                respuesta = search_and_answer(query, max_results=3)
-            except Exception as e:
-                respuesta = (
-                    "Para responder con Internet necesito la librería 'duckduckgo_search'. "
-                    "Instálala con pip e inténtalo de nuevo. Detalle: " + str(e)
-                )
+            # Ejecutar en segundo plano para no bloquear la UI
+            import re
+            query = texto_l
+            for kw in ["según internet", "segun internet", "busca en internet", "consulta en internet", "investiga"]:
+                query = query.replace(kw, "").strip()
+            query = re.sub(r"^(qué es|que es|quién es|quien es|cómo funciona|como funciona|definición de|definicion de)\s*", "", query)
+            if not query:
+                query = texto
+            self.chat_signal.emit("Buscando en Internet…", 'sistema')
+            self._buscar_internet_async(query, provider="ddg")
+            return
         # Reproducir música
         elif "reproduce" in texto_l or "pon música" in texto_l:
             import webbrowser
@@ -331,23 +333,20 @@ class AsistenteMain(QMainWindow):
             patron = r"crear evento (.+?) (?:el|para) (\d{4}-\d{2}-\d{2})(?:\s+(?:a las\s+)?(\d{1,2}:\d{2}))?"
             m = re.search(patron, texto_l)
             if m:
-                evento = m.group(1).strip()
+                titulo = m.group(1).strip()
                 fecha = m.group(2)
-                hora = m.group(3) if m.lastindex and m.group(3) else None
+                hora = (m.group(3) or '').strip() or None
                 # Normalizar hora a HH:MM
                 if hora:
                     try:
-                        hh, mm = hora.split(":")
-                        hora = f"{int(hh):02d}:{int(mm):02d}"
+                        h, mi = map(int, hora.split(':'))
+                        hora = f"{h:02d}:{mi:02d}"
                     except Exception:
-                        hora = None
+                        pass
                 try:
                     from calendario import crear_evento
-                    msg = crear_evento(evento, fecha, hora)
-                    if hora:
-                        respuesta = f"{msg} '{evento}' el {fecha} a las {hora}."
-                    else:
-                        respuesta = f"{msg} '{evento}' el {fecha}."
+                    msg = crear_evento(titulo, fecha, hora)
+                    respuesta = f"{msg} {titulo} el {fecha}{' a las ' + hora if hora else ''}."
                 except Exception as e:
                     respuesta = f"No pude crear el evento: {e}"
             else:
@@ -440,10 +439,7 @@ class AsistenteMain(QMainWindow):
         else:
             respuesta = 'Comando recibido: ' + texto
         self.chat_signal.emit(respuesta, 'sistema')
-        try:
-            hablar(respuesta)
-        except Exception:
-            pass
+        self.hablar_async(respuesta)
 
     def enviar_comando_escrito(self) -> None:
         """Lee el texto del input, lo envía al chat y procesa la respuesta."""
@@ -762,6 +758,24 @@ class AsistenteMain(QMainWindow):
         except Exception:
             pass
 
+    def _buscar_internet_async(self, query: str, provider: str = "ddg") -> None:
+        """Lanza búsqueda sin bloquear la UI y lee solo el resumen, no enlaces."""
+        def _job():
+            try:
+                from web_search import search_and_answer
+                resp = search_and_answer(query, max_results=3, provider=provider)
+            except Exception as e:
+                resp = f"No pude buscar en Internet: {e}"
+            # Extraer solo la primera línea o párrafo (antes de 'Fuente' o 'Más fuentes')
+            linea = resp.split("\n")[0].strip()
+            if len(linea) < 6:
+                linea = resp[:180].split("\n")[0]
+            # Emitir en chat el texto completo para que el usuario tenga enlaces
+            self.chat_signal.emit(resp, 'sistema')
+            # Leer por voz solo el resumen
+            self.hablar_async(linea)
+        threading.Thread(target=_job, daemon=True).start()
+
     # ===== Recordatorios de eventos =====
     def _iniciar_recordatorios(self) -> None:
         """Configura un temporizador que recuerda eventos del día una vez al día."""
@@ -805,10 +819,7 @@ class AsistenteMain(QMainWindow):
         # Emitir aviso solo si hay algo útil o si es la primera vez del día
         if eventos:
             self.chat_signal.emit(aviso, 'sistema')
-            try:
-                hablar(aviso)
-            except Exception:
-                pass
+            self.hablar_async(aviso)
         self._recordatorio_fecha_mostrado = hoy_str
 
     # ===== Alertas de eventos (hora exacta y 5 minutos antes) =====
@@ -857,10 +868,7 @@ class AsistenteMain(QMainWindow):
         msg = f"Alerta {tipo}: {titulo} a las {hora} el {fecha}."
         # Chat + voz
         self.chat_signal.emit(msg, 'sistema')
-        try:
-            hablar(msg)
-        except Exception:
-            pass
+        self.hablar_async(msg)
         # Sonido breve (usar winsound en Windows)
         try:
             if sys.platform == 'win32':
