@@ -685,7 +685,7 @@ class AsistenteMain(QMainWindow):
         vvoz = QVBoxLayout(voz_card); vvoz.setContentsMargins(14,10,14,10); vvoz.setSpacing(6)
         lblv = QLabel("Voz (idioma / velocidad / género)"); lblv.setStyleSheet("color:#fff;font-size:13px;font-weight:600;")
         vvoz.addWidget(lblv)
-        from PyQt5.QtWidgets import QHBoxLayout, QComboBox
+    # (Import interno eliminado para evitar sombrear símbolos ya importados arriba)
         hvoz = QHBoxLayout(); hvoz.setSpacing(6); hvoz.setContentsMargins(0,0,0,0)
         self.combo_voice_lang = QComboBox(); self.combo_voice_lang.setStyleSheet("background:rgba(0,0,0,0.35);color:#8be9ff;border:1px solid #0ff;border-radius:6px;padding:2px 6px;font-size:12px;")
         for code,label in [("es","Español"),("en","Inglés"),("fr","Francés"),("de","Alemán"),("it","Italiano")]:
