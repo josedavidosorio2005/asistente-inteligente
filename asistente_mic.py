@@ -33,6 +33,10 @@ except Exception:
     from voz import escuchar_comando, hablar
 import json
 from datetime import datetime, timedelta
+try:
+    from src import db  # nuevo backend SQLite
+except ImportError:
+    import db  # type: ignore
 
 class MicrofonoWidget(QWidget):
     """Widget decorativo que dibuja un micrófono con efecto neón animado."""
@@ -248,7 +252,15 @@ class AsistenteMain(QMainWindow):
                 "- según internet <tu pregunta> | qué es <tema>\n"
                 "- crear nota <título> [en <carpeta>] | leer nota <título>\n"
                 "- eliminar nota <título> | buscar nota <palabra> [en <carpeta>]\n"
+                "- /limpiar_legacy (renombrar archivos legacy eventos.json / notas)\n"
             )
+        elif texto_l.strip() == '/limpiar_legacy':
+            ok = False
+            try:
+                ok = db.cleanup_legacy()
+            except Exception:
+                pass
+            respuesta = 'Archivos legacy renombrados.' if ok else 'No había archivos legacy que renombrar.'
         # Decir la hora
         elif "hora" in texto_l:
             from datetime import datetime
@@ -538,6 +550,13 @@ class AsistenteMain(QMainWindow):
         self._timer_alertas = None
         self._active_notifs = []
         self.init_ui()
+        # Mensaje de migración (primera vez)
+        try:
+            msg_m = db.consume_migration_message()
+            if msg_m:
+                self.chat_signal.emit(msg_m, 'sistema')
+        except Exception:
+            pass
         # Iniciar recordatorios después de construir la UI
         try:
             self._iniciar_recordatorios()
@@ -792,6 +811,7 @@ class AsistenteMain(QMainWindow):
             "<li><b>Crear evento</b>: crear evento &lt;nombre&gt; el YYYY-MM-DD [a las HH:MM]</li>"
             "<li><b>Notas</b>: crear nota &lt;título&gt; [en &lt;carpeta&gt;] | leer nota &lt;título&gt; | eliminar nota &lt;título&gt; | buscar nota &lt;palabra&gt; [en &lt;carpeta&gt;] | crear carpeta &lt;nombre&gt;</li>"
             "<li><b>PC</b>: apagar el equipo | reiniciar el equipo</li>"
+            "<li><b>Migración</b>: /limpiar_legacy para renombrar eventos.json y notas/ antiguas</li>"
             "</ul>"
             "<h4 style='color:#8be9ff;margin:10px 0 6px 0;'>Consejos</h4>"
             "<ul>"
@@ -1023,29 +1043,34 @@ class AsistenteMain(QMainWindow):
         return None if val == "(sin carpeta)" else val
 
     def cargar_combo_carpetas(self) -> None:
-        base = self.ruta_notas()
-        os.makedirs(base, exist_ok=True)
-        carpetas = [d for d in os.listdir(base) if os.path.isdir(os.path.join(base, d))]
+        try:
+            carpetas = db.note_list_folders()
+        except Exception:
+            carpetas = []
         self.carpeta_combo.blockSignals(True)
         self.carpeta_combo.clear()
         self.carpeta_combo.addItem("(sin carpeta)")
-        for c in sorted(carpetas):
+        for c in carpetas:
             self.carpeta_combo.addItem(c)
         self.carpeta_combo.blockSignals(False)
 
     def cargar_lista_notas(self) -> None:
         carpeta = self.carpeta_actual()
-        ruta = self.ruta_notas(carpeta)
-        os.makedirs(ruta, exist_ok=True)
+        try:
+            titulos = db.note_list_titles(carpeta)
+        except Exception:
+            titulos = []
         self.lista_notas.clear()
-        for f in sorted(os.listdir(ruta)):
-            if f.endswith('.txt'):
-                self.lista_notas.addItem(os.path.splitext(f)[0])
+        for t in titulos:
+            self.lista_notas.addItem(t)
 
     def cargar_nota_desde_lista(self, item) -> None:
         titulo = item.text()
         carpeta = self.carpeta_actual()
-        contenido = self.leer_nota(titulo, carpeta)
+        try:
+            contenido = db.note_get(titulo, carpeta)
+        except Exception:
+            contenido = None
         if contenido is None:
             self.chat_signal.emit(f"No se pudo abrir la nota '{titulo}'.", 'sistema')
             return
@@ -1059,12 +1084,11 @@ class AsistenteMain(QMainWindow):
             QMessageBox.warning(self, "Notas", "El título no puede estar vacío.")
             return
         carpeta = self.carpeta_actual()
-        try:
-            self.guardar_nota(titulo, contenido, carpeta)
+        if db.note_upsert(titulo, contenido, carpeta):
             self.chat_signal.emit(f"Nota '{titulo}' guardada.", 'sistema')
             self.cargar_lista_notas()
-        except Exception as e:
-            QMessageBox.critical(self, "Notas", f"Error guardando la nota: {e}")
+        else:
+            QMessageBox.critical(self, "Notas", "Error guardando la nota en la base de datos.")
 
     def eliminar_nota_desde_gui(self) -> None:
         item = self.lista_notas.currentItem()
@@ -1073,7 +1097,7 @@ class AsistenteMain(QMainWindow):
             return
         titulo = item.text()
         carpeta = self.carpeta_actual()
-        if self.eliminar_nota(titulo, carpeta):
+        if db.note_delete(titulo, carpeta):
             self.chat_signal.emit(f"Nota '{titulo}' eliminada.", 'sistema')
             self.cargar_lista_notas()
             if self.titulo_edit.text().strip() == titulo:
@@ -1089,65 +1113,29 @@ class AsistenteMain(QMainWindow):
             if not nombre:
                 QMessageBox.information(self, "Notas", "El nombre no puede estar vacío.")
                 return
-            os.makedirs(self.ruta_notas(nombre), exist_ok=True)
+            # Crear una nota dummy para asegurar carpeta en listado si está vacía
+            dummy_title = f"__carpeta__{nombre}__placeholder__"
+            db.note_upsert(dummy_title, "", nombre)
+            # Eliminar placeholder si existía
+            db.note_delete(dummy_title, nombre)
             self.cargar_combo_carpetas()
             idx = self.carpeta_combo.findText(nombre)
             if idx >= 0:
                 self.carpeta_combo.setCurrentIndex(idx)
             self.cargar_lista_notas()
 
-    # ===== Helpers de notas (filesystem) =====
-    def ruta_notas(self, carpeta: str | None = None) -> str:
-        base = os.path.join(PROJECT_DIR, 'notas')
-        return os.path.join(base, carpeta) if carpeta else base
-
-    def ruta_nota(self, titulo: str, carpeta: str | None = None) -> str:
-        nombre = f"{titulo}.txt"
-        return os.path.join(self.ruta_notas(carpeta), nombre)
-
+    # ===== Helpers de notas (BD) =====
     def guardar_nota(self, titulo: str, contenido: str, carpeta: str | None = None) -> None:
-        ruta = self.ruta_nota(titulo, carpeta)
-        os.makedirs(os.path.dirname(ruta), exist_ok=True)
-        with open(ruta, 'w', encoding='utf-8') as f:
-            f.write(contenido)
+        db.note_upsert(titulo, contenido, carpeta)
 
     def leer_nota(self, titulo: str, carpeta: str | None = None) -> str | None:
-        ruta = self.ruta_nota(titulo, carpeta)
-        if not os.path.exists(ruta):
-            return None
-        try:
-            with open(ruta, 'r', encoding='utf-8') as f:
-                return f.read()
-        except Exception:
-            return None
+        return db.note_get(titulo, carpeta)
 
     def eliminar_nota(self, titulo: str, carpeta: str | None = None) -> bool:
-        ruta = self.ruta_nota(titulo, carpeta)
-        if os.path.exists(ruta):
-            try:
-                os.remove(ruta)
-                return True
-            except Exception:
-                return False
-        return False
+        return db.note_delete(titulo, carpeta)
 
-    def buscar_notas(self, palabra: str, carpeta: str | None = None) -> list[tuple[str, str]]:
-        resultados: list[tuple[str, str]] = []
-        palabra_l = palabra.lower()
-        carpetas = [carpeta] if carpeta else [d for d in os.listdir(self.ruta_notas()) if os.path.isdir(self.ruta_notas(d))]
-        for c in carpetas:
-            ruta = self.ruta_notas(c)
-            for f in os.listdir(ruta):
-                if f.endswith('.txt'):
-                    titulo = os.path.splitext(f)[0]
-                    try:
-                        with open(os.path.join(ruta, f), 'r', encoding='utf-8') as fh:
-                            contenido = fh.read().lower()
-                        if palabra_l in titulo.lower() or palabra_l in contenido:
-                            resultados.append((titulo, c))
-                    except Exception:
-                        pass
-        return resultados
+    def buscar_notas(self, palabra: str, carpeta: str | None = None) -> list[tuple[str, str | None]]:
+        return db.note_search(palabra, carpeta)
 
     # ===== Calendario =====
     def abrir_calendario(self) -> None:
@@ -1165,7 +1153,7 @@ class AsistenteMain(QMainWindow):
                 dlg.setWindowFlags(dlg.windowFlags() | Qt.WindowMinimizeButtonHint | Qt.WindowMaximizeButtonHint | Qt.WindowCloseButtonHint)
             except Exception:
                 pass
-            lay = QVBoxLayout(dlg)
+            lay = QVBoxLayout()
             calw = CalendarioEventos(eventos_path, parent=dlg)
             try:
                 calw.evento_toggle_completado.connect(

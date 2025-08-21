@@ -1,3 +1,0 @@
-{
-  "image.png": "Descargar Node.js@\nObtener Node.js@ versión 22.18.O(LTS) v\npara\nVentanas\nusando\nEstibador v\nInformación ¿Quieres nuevas funciones antes? iDescarga la última versión de NodeJsy prueba las últimas mejoras!\n# Docker has specific installation instructions for each operating system.\n# Please refer to the official documentation at https://docker.com/get-started/\n# Pull the Node .js Docker image:\ndocker pull node:22-a1pine\n# Create a Node .js container and start a Shell session:\ndocker run -it --rm\n-entrypoint sh node:22-a1pine\n# Verify the Node.js version:\nnode -v\n# Should print \"v22.18.@\"\n# Verify npm version:\n# Should print \"1@.9.3\"\nnpm -v\nPowerShell\nCopiar al portapapeles"
-}

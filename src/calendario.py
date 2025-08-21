@@ -1,143 +1,88 @@
-"""Gestión sencilla de eventos y recordatorios.
+"""Backend de calendario usando SQLite (db.py) con API compatible previa.
 
-Persiste en `resumenes/eventos.json`.
+Se mantienen los nombres de funciones para no romper el resto del código.
 """
 from __future__ import annotations
-import json
-import os
 from datetime import datetime, timedelta
-
-EVENTOS_PATH = os.path.join(os.path.dirname(__file__), '..', 'resumenes', 'eventos.json')
+try:  # Permite uso como 'from src import calendario' y también 'import calendario'
+    from . import db  # type: ignore
+except ImportError:  # cuando se importa como módulo suelto
+    import db  # type: ignore
 
 
 def crear_evento(evento: str, fecha: str, hora: str | None = None) -> str:
-    """Crea un evento con fecha ISO (YYYY-MM-DD) y hora opcional (HH:MM).
+    ok = db.event_create(evento, fecha, hora)
+    return "Evento creado." if ok else "No se pudo crear el evento (posible duplicado)."
 
-    Devuelve mensaje de estado.
-    """
-    if os.path.exists(EVENTOS_PATH):
-        with open(EVENTOS_PATH, 'r', encoding='utf-8') as f:
-            eventos = json.load(f)
-    else:
-        eventos = []
-    ev = {'evento': evento, 'fecha': fecha, 'completado': False}
-    if hora:
-        ev['hora'] = hora
-    eventos.append(ev)
-    with open(EVENTOS_PATH, 'w', encoding='utf-8') as f:
-        json.dump(eventos, f, ensure_ascii=False, indent=2)
-    return "Evento creado."
-# Consulta eventos por día o semana
+
 def consultar_eventos(modo: str) -> tuple[list[dict], str]:
-    """Consulta eventos por modo ('hoy' o 'semana').
-
-    Retorna una tupla: (lista_eventos, mensaje_humano).
-    """
-    if not os.path.exists(EVENTOS_PATH):
-        return [], "No hay eventos guardados."
-    with open(EVENTOS_PATH, 'r', encoding='utf-8') as f:
-        eventos = json.load(f)
     hoy = datetime.now().date()
     if modo == 'hoy':
-        encontrados = [ev for ev in eventos if ev['fecha'] == str(hoy)]
-        if encontrados:
-            return encontrados, f"Eventos para hoy {hoy}: {encontrados}"
-        else:
-            return [], "No tienes eventos para hoy."
+        evs = db.event_list_day(str(hoy))
+        eventos = [
+            {
+                'evento': e['title'],
+                'fecha': e['date'],
+                'hora': e['time'],
+                'completado': bool(e['completed'])
+            } for e in evs
+        ]
+        if eventos:
+            return eventos, f"Eventos para hoy {hoy}: {len(eventos)}"
+        return [], "No tienes eventos para hoy."
     elif modo == 'semana':
-        fin_semana = hoy + timedelta(days=6-hoy.weekday())
-        encontrados = [ev for ev in eventos if hoy <= datetime.strptime(ev['fecha'], '%Y-%m-%d').date() <= fin_semana]
-        if encontrados:
-            return encontrados, f"Eventos para esta semana ({hoy} a {fin_semana}): {encontrados}"
-        else:
-            return [], "No tienes eventos para esta semana."
+        # Semana hasta domingo (o 6 días más desde hoy)
+        fin_semana = hoy + timedelta(days=6 - hoy.weekday())
+        evs = db.event_list_week(str(hoy), str(fin_semana))
+        eventos = [
+            {
+                'evento': e['title'],
+                'fecha': e['date'],
+                'hora': e['time'],
+                'completado': bool(e['completed'])
+            } for e in evs
+        ]
+        if eventos:
+            return eventos, f"Eventos para esta semana ({hoy} a {fin_semana})."
+        return [], "No tienes eventos para esta semana."
+    return [], "Modo no soportado."
+
 
 def editar_evento(idx: int, nuevo_evento: str, nueva_fecha: str) -> str:
-    """Edita un evento por índice. Devuelve mensaje de estado."""
-    if not os.path.exists(EVENTOS_PATH):
-        return "No hay eventos para editar."
-    with open(EVENTOS_PATH, 'r', encoding='utf-8') as f:
-        eventos = json.load(f)
-    if 0 <= idx < len(eventos):
-        eventos[idx]['evento'] = nuevo_evento
-        eventos[idx]['fecha'] = nueva_fecha
-        with open(EVENTOS_PATH, 'w', encoding='utf-8') as f:
-            json.dump(eventos, f, ensure_ascii=False, indent=2)
-        return "Evento editado."
-    else:
-        return "Índice no válido."
+    # No hay índice en el nuevo modelo; se omite (se podría mapear con ID real)
+    return "Edición por índice no soportada en BD."
+
 
 def eliminar_evento(idx: int) -> str:
-    """Elimina un evento por índice. Devuelve mensaje de estado."""
-    if not os.path.exists(EVENTOS_PATH):
-        return "No hay eventos para eliminar."
-    with open(EVENTOS_PATH, 'r', encoding='utf-8') as f:
-        eventos = json.load(f)
-    if 0 <= idx < len(eventos):
-        eventos.pop(idx)
-        with open(EVENTOS_PATH, 'w', encoding='utf-8') as f:
-            json.dump(eventos, f, ensure_ascii=False, indent=2)
-        return "Evento eliminado."
-    else:
-        return "Índice no válido."
+    return "Eliminación por índice no soportada en BD."
 
-def leer_eventos() -> list[dict]:
-    """Lee y devuelve todos los eventos guardados (puede incluir clave 'hora')."""
-    if not os.path.exists(EVENTOS_PATH):
-        return []
+
+def leer_eventos(dias_hacia_adelante: int = 365) -> list[dict]:
+    """Devuelve eventos próximos hasta 'dias_hacia_adelante'.
+
+    Parametros:
+        dias_hacia_adelante: rango futuro a recuperar (por defecto 365).
+    """
+    from datetime import date as _date
+    if dias_hacia_adelante < 0:
+        dias_hacia_adelante = 0
+    start = _date.today()
+    end = start + timedelta(days=dias_hacia_adelante)
     try:
-        with open(EVENTOS_PATH, 'r', encoding='utf-8') as f:
-            eventos = json.load(f)
-        if isinstance(eventos, list):
-            return eventos
-        return []
+        evs = db.event_list_week(str(start), str(end))
     except Exception:
         return []
+    return [{
+        'evento': e['title'],
+        'fecha': e['date'],
+        'hora': e['time'],
+        'completado': bool(e['completed'])
+    } for e in evs]
+
 
 def marcar_evento_completado(evento: str, fecha: str, hora: str | None = None, completado: bool = True) -> bool:
-    """Marca el primer evento que coincida como completado (o no).
+    return db.event_toggle_complete(evento, fecha, hora, completado)
 
-    Coincide por fecha y título; si se proporciona hora, también por hora.
-    Devuelve True si se actualizó algo.
-    """
-    if not os.path.exists(EVENTOS_PATH):
-        return False
-    try:
-        with open(EVENTOS_PATH, 'r', encoding='utf-8') as f:
-            eventos = json.load(f)
-        cambiado = False
-        for ev in eventos:
-            if ev.get('fecha') == fecha and ev.get('evento') == evento and (hora is None or ev.get('hora') == hora):
-                ev['completado'] = bool(completado)
-                cambiado = True
-                break
-        if cambiado:
-            with open(EVENTOS_PATH, 'w', encoding='utf-8') as f:
-                json.dump(eventos, f, ensure_ascii=False, indent=2)
-        return cambiado
-    except Exception:
-        return False
 
 def eliminar_evento_por_datos(evento: str, fecha: str, hora: str | None = None) -> int:
-    """Elimina eventos que coincidan con (evento, fecha [, hora]).
-
-    Si hora es None elimina todos los que coincidan por título y fecha sin considerar hora.
-    Devuelve la cantidad eliminada.
-    """
-    if not os.path.exists(EVENTOS_PATH):
-        return 0
-    try:
-        with open(EVENTOS_PATH, 'r', encoding='utf-8') as f:
-            eventos = json.load(f)
-        inicial = len(eventos)
-        if hora is None:
-            eventos = [ev for ev in eventos if not (ev.get('evento') == evento and ev.get('fecha') == fecha)]
-        else:
-            eventos = [ev for ev in eventos if not (ev.get('evento') == evento and ev.get('fecha') == fecha and ev.get('hora') == hora)]
-        eliminados = inicial - len(eventos)
-        if eliminados:
-            with open(EVENTOS_PATH, 'w', encoding='utf-8') as f:
-                json.dump(eventos, f, ensure_ascii=False, indent=2)
-        return eliminados
-    except Exception:
-        return 0
+    return db.event_delete(evento, fecha, hora)

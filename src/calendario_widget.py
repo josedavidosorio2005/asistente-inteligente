@@ -1,6 +1,7 @@
-"""Widget de calendario con listado/alta de eventos locales.
+"""Widget de calendario con listado/alta de eventos usando SQLite (db.py).
 
-Persiste en el JSON apuntado por `eventos_path`.
+Se mantiene compatibilidad superficial con la antigua interfaz pero ya no
+escribe en JSON; si existe el JSON se migra por `db.get_conn()`.
 """
 from PyQt5.QtWidgets import (
     QWidget, QCalendarWidget, QVBoxLayout, QLabel, QListWidget, QListWidgetItem,
@@ -9,7 +10,10 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import QDate, Qt, QTime, pyqtSignal
 from PyQt5.QtGui import QFont, QColor
 import os
-import json
+try:
+    from . import db  # type: ignore
+except ImportError:
+    import db  # type: ignore
 
 
 class CalendarioEventos(QWidget):
@@ -142,11 +146,14 @@ class CalendarioEventos(QWidget):
                 return
             d = input_fecha.date().toString('yyyy-MM-dd')
             h = input_hora.time().toString('HH:mm')
-            eventos = self.cargar_eventos()
-            ev = {'evento': evento, 'fecha': d, 'hora': h, 'completado': False}
-            eventos.append(ev)
-            with open(self.eventos_path, 'w', encoding='utf-8') as f:
-                json.dump(eventos, f, ensure_ascii=False, indent=2)
+            try:
+                from calendario import crear_evento
+                crear_evento(evento, d, h)
+            except Exception:
+                try:
+                    db.event_create(evento, d, h)
+                except Exception:
+                    pass
             self.mostrar_eventos_dia()
             dlg.accept()
         btn_ok.clicked.connect(crear)
@@ -154,10 +161,22 @@ class CalendarioEventos(QWidget):
         dlg.exec_()
 
     def cargar_eventos(self) -> list[dict]:
-        if not os.path.exists(self.eventos_path):
+        # Devuelve eventos de toda la base (año corriente). Optimizable si hiciera falta.
+        from datetime import date, timedelta
+        hoy = date.today()
+        fin = hoy + timedelta(days=365)
+        try:
+            rows = db.event_list_week(str(hoy), str(fin))
+            return [
+                {
+                    'evento': r['title'],
+                    'fecha': r['date'],
+                    'hora': r['time'],
+                    'completado': bool(r['completed'])
+                } for r in rows
+            ]
+        except Exception:
             return []
-        with open(self.eventos_path, 'r', encoding='utf-8') as f:
-            return json.load(f)
 
     def mostrar_eventos_dia(self) -> None:
         fecha = self.calendario.selectedDate().toString('yyyy-MM-dd')
@@ -188,7 +207,6 @@ class CalendarioEventos(QWidget):
         items = self.lista.selectedItems()
         if not items:
             return
-        # Intentar vía API principal por cada ítem; si falla, aplicamos un fallback por lote
         fallbacks: list[tuple[str, str, object]] = []
         for it in items:
             data = it.data(Qt.UserRole) or {}
@@ -200,24 +218,16 @@ class CalendarioEventos(QWidget):
                 marcar_evento_completado(titulo, fecha, hora or None, completado)
             except Exception:
                 fallbacks.append((titulo, fecha, hora))
-            # Emitir señal por cada cambio
             try:
                 self.evento_toggle_completado.emit(titulo, fecha, hora, completado)
             except Exception:
                 pass
         if fallbacks:
-            eventos = self.cargar_eventos()
             for titulo, fecha, hora in fallbacks:
-                for ev in eventos:
-                    if ev.get('evento') == titulo and ev.get('fecha') == fecha and (ev.get('hora') or None) == (hora or None):
-                        ev['completado'] = completado
-                        break
-            try:
-                with open(self.eventos_path, 'w', encoding='utf-8') as f:
-                    json.dump(eventos, f, ensure_ascii=False, indent=2)
-            except Exception:
-                pass
-        # Refrescar
+                try:
+                    db.event_toggle_complete(titulo, fecha, hora, completado)
+                except Exception:
+                    pass
         self.mostrar_eventos_dia()
 
     def _estilizar_item(self, item: QListWidgetItem, completado: bool) -> None:
@@ -240,15 +250,8 @@ class CalendarioEventos(QWidget):
             from calendario import marcar_evento_completado
             marcar_evento_completado(titulo, fecha, hora or None, not estado)
         except Exception:
-            # Fallback manual si no existe la función
-            eventos = self.cargar_eventos()
-            for ev in eventos:
-                if ev.get('evento') == titulo and ev.get('fecha') == fecha and (ev.get('hora') or None) == (hora or None):
-                    ev['completado'] = not estado
-                    break
             try:
-                with open(self.eventos_path, 'w', encoding='utf-8') as f:
-                    json.dump(eventos, f, ensure_ascii=False, indent=2)
+                db.event_toggle_complete(titulo, fecha, hora, not estado)
             except Exception:
                 pass
         # Emitir señal con el nuevo estado
@@ -276,26 +279,16 @@ class CalendarioEventos(QWidget):
         if not claves:
             return
         # Cargar todos los eventos
-        eventos = self.cargar_eventos()
-        inicial = len(eventos)
-        # Filtrar
-        def coincide(ev, clave):
-            t, f, h = clave
-            if ev.get('evento') != t or ev.get('fecha') != f:
-                return False
-            if h is None:
-                return True if (ev.get('hora') is None or True) else True  # ignora hora
-            return (ev.get('hora') == h)
-        filtrados = [ev for ev in eventos if not any(coincide(ev, c) for c in claves)]
-        eliminados = inicial - len(filtrados)
-        if eliminados <= 0:
-            return
-        # Guardar
-        try:
-            with open(self.eventos_path, 'w', encoding='utf-8') as f:
-                json.dump(filtrados, f, ensure_ascii=False, indent=2)
-        except Exception:
-            return
+        # Eliminar cada clave vía API/DB
+        for (t, f, h) in claves:
+            try:
+                from calendario import eliminar_evento_por_datos
+                eliminar_evento_por_datos(t, f, h)
+            except Exception:
+                try:
+                    db.event_delete(t, f, h)
+                except Exception:
+                    pass
         # Emitir señal por cada eliminado
         for (t, f, h) in claves:
             try:
