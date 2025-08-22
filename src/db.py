@@ -7,7 +7,7 @@ Crea y gestiona la base de datos local:
 Migra datos legacy desde JSON (eventos.json) y archivos .txt de notas.
 """
 from __future__ import annotations
-import os, json, sqlite3, threading, time
+import os, json, sqlite3, threading, time, contextlib, traceback
 from pathlib import Path
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent
@@ -45,7 +45,63 @@ SCHEMA = [
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
     )""",
+    # Meta (versionado del esquema y futuros flags)
+    """CREATE TABLE IF NOT EXISTS meta (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+    )""",
 ]
+
+# Índices auxiliares para acelerar consultas por fecha / carpeta.
+INDEXES = [
+    "CREATE INDEX IF NOT EXISTS idx_events_date ON events(date)",
+    "CREATE INDEX IF NOT EXISTS idx_events_date_time ON events(date,time)",
+    "CREATE INDEX IF NOT EXISTS idx_notes_folder ON notes(folder)"
+]
+
+LOG_FILE = DATA_DIR / 'db_errors.log'
+
+def _log_error(prefix: str, exc: Exception):
+    try:
+        with LOG_FILE.open('a', encoding='utf-8') as f:
+            f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {prefix}: {exc}\n")
+            f.write(''.join(traceback.format_exception(type(exc), exc, exc.__traceback__)) + '\n')
+    except Exception:
+        pass
+
+def _init_pragmas(conn: sqlite3.Connection):
+    try:
+        conn.execute('PRAGMA journal_mode=WAL')
+        conn.execute('PRAGMA synchronous=NORMAL')
+        conn.execute('PRAGMA foreign_keys=ON')
+        conn.execute('PRAGMA busy_timeout=5000')
+    except Exception as e:
+        _log_error('init_pragmas', e)
+
+@contextlib.contextmanager
+def transaction():
+    """Context manager de transacción (commit/rollback automáticos)."""
+    conn = get_conn()
+    try:
+        yield conn
+        conn.commit()
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        _log_error('transaction', e)
+        raise
+
+def optimize(vacuum: bool = False):
+    """Ejecuta ANALYZE y opcional VACUUM para mantenimiento manual."""
+    conn = get_conn()
+    try:
+        conn.execute('ANALYZE')
+        if vacuum:
+            conn.execute('VACUUM')
+    except Exception as e:
+        _log_error('optimize', e)
 
 def get_conn() -> sqlite3.Connection:
     global _conn
@@ -54,12 +110,14 @@ def get_conn() -> sqlite3.Connection:
     with _lock:
         if _conn is None:
             need_migration = not DB_PATH.exists()
-            _conn = sqlite3.connect(str(DB_PATH))
+            _conn = sqlite3.connect(str(DB_PATH), check_same_thread=False, isolation_level=None)
             _conn.row_factory = sqlite3.Row
+            _init_pragmas(_conn)
             try:
                 for ddl in SCHEMA:
                     _conn.execute(ddl)
-                _conn.commit()
+                for idx in INDEXES:
+                    _conn.execute(idx)
             except sqlite3.OperationalError as e:
                 # Si el error es por expresiones prohibidas (versión previa), recrear BD limpia
                 if 'expressions prohibited' in str(e).lower():
@@ -69,11 +127,13 @@ def get_conn() -> sqlite3.Connection:
                         pass
                     if DB_PATH.exists():
                         DB_PATH.unlink(missing_ok=True)  # type: ignore[arg-type]
-                    _conn = sqlite3.connect(str(DB_PATH))
+                    _conn = sqlite3.connect(str(DB_PATH), check_same_thread=False, isolation_level=None)
                     _conn.row_factory = sqlite3.Row
+                    _init_pragmas(_conn)
                     for ddl in SCHEMA:
                         _conn.execute(ddl)
-                    _conn.commit()
+                    for idx in INDEXES:
+                        _conn.execute(idx)
                 else:
                     raise
             if need_migration:
@@ -94,14 +154,176 @@ def get_conn() -> sqlite3.Connection:
                 pass
             # Asegurar que todas las tablas existen (por fallos anteriores de creación)
             try:
-                existentes = {r[0] for r in _conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-                if 'events' not in existentes or 'notes' not in existentes or 'config' not in existentes:
-                    for ddl in SCHEMA:
-                        _conn.execute(ddl)
-                    _conn.commit()
-            except Exception:
-                pass
+                for idx in INDEXES:
+                    _conn.execute(idx)
+            except Exception as e:
+                _log_error('indexes_late', e)
+            # Aplicar upgrades de esquema (FTS, triggers, etc.)
+            try:
+                _apply_schema_upgrades(_conn)
+            except Exception as e:
+                _log_error('schema_upgrade', e)
         return _conn
+
+# ================== SCHEMA VERSIONING & UPGRADES ==================
+
+def _get_schema_version(conn: sqlite3.Connection) -> int:
+    try:
+        cur = conn.execute("SELECT value FROM meta WHERE key='schema_version'")
+        row = cur.fetchone()
+        if not row:
+            return 0
+        return int(row[0])
+    except Exception:
+        return 0
+
+def _set_schema_version(conn: sqlite3.Connection, version: int):
+    try:
+        conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version',?)", (str(version),))
+    except Exception as e:
+        _log_error('set_schema_version', e)
+
+def _apply_schema_upgrades(conn: sqlite3.Connection):
+    """Aplica migraciones incrementales. Versión base = 0.
+
+    v1: (implícito) tablas básicas + meta.
+    v2: FTS5 para notas (notes_fts) + triggers sincronización.
+    """
+    version = _get_schema_version(conn)
+    target = 2
+    if version < 1:
+        # Establecer versión inicial si no existía.
+        _set_schema_version(conn, 1)
+        version = 1
+    if version < 2:
+        _upgrade_to_v2(conn)
+        _set_schema_version(conn, 2)
+
+def _upgrade_to_v2(conn: sqlite3.Connection):
+    """Crea FTS5 para notas si está disponible."""
+    try:
+        # Verificar soporte FTS5
+        try:
+            conn.execute("SELECT 1 FROM sqlite_master")
+            # Intento de crear virtual table (idempotente con IF NOT EXISTS no soportado en FTS5, se captura excepción)
+            conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(title, content, folder, content='notes', content_rowid='id')")
+        except sqlite3.OperationalError as e:
+            if 'fts5' in str(e).lower():
+                return  # Sin soporte FTS5, se aborta silenciosamente
+            raise
+        # Triggers (usar OR REPLACE para evitar duplicados si se recrean)
+        conn.execute("CREATE TRIGGER IF NOT EXISTS notes_ai AFTER INSERT ON notes BEGIN INSERT INTO notes_fts(rowid, title, content, folder) VALUES (new.id, new.title, new.content, new.folder); END;")
+        conn.execute("CREATE TRIGGER IF NOT EXISTS notes_au AFTER UPDATE ON notes BEGIN INSERT INTO notes_fts(notes_fts, rowid, title, content, folder) VALUES('delete', old.id, old.title, old.content, old.folder); INSERT INTO notes_fts(rowid, title, content, folder) VALUES (new.id, new.title, new.content, new.folder); END;")
+        conn.execute("CREATE TRIGGER IF NOT EXISTS notes_ad AFTER DELETE ON notes BEGIN INSERT INTO notes_fts(notes_fts, rowid, title, content, folder) VALUES('delete', old.id, old.title, old.content, old.folder); END;")
+    except Exception as e:
+        _log_error('upgrade_v2', e)
+
+# ================== UTILIDADES EXTRA ==================
+
+def backup_export(path: str | None = None) -> str | None:
+    """Exporta contenido (events, notes, config) a JSON en data/backups.
+
+    Si se provee path, guarda allí; retorna ruta final o None si fallo.
+    """
+    conn = get_conn()
+    try:
+        DATA_DIR.mkdir(exist_ok=True)
+        backup_dir = DATA_DIR / 'backups'
+        backup_dir.mkdir(exist_ok=True)
+        if path is None:
+            fname = f"backup_{int(time.time())}.json"
+            path_obj = backup_dir / fname
+        else:
+            path_obj = Path(path)
+        data = {}
+        for tbl in ('events', 'notes', 'config'):
+            try:
+                cur = conn.execute(f"SELECT * FROM {tbl}")
+                cols = [d[0] for d in cur.description]
+                data[tbl] = [dict(zip(cols, row)) for row in cur.fetchall()]
+            except Exception as e:
+                _log_error('backup_export_table_'+tbl, e)
+        path_obj.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
+        return str(path_obj)
+    except Exception as e:
+        _log_error('backup_export', e)
+        return None
+
+def backup_import(path: str) -> bool:
+    """Importa datos desde un JSON exportado. No borra datos existentes (INSERT OR IGNORE / REPLACE según caso)."""
+    conn = get_conn()
+    try:
+        content = Path(path).read_text(encoding='utf-8')
+        blob = json.loads(content)
+        with transaction() as tx:
+            for ev in blob.get('events', []):
+                try:
+                    tx.execute("INSERT OR IGNORE INTO events(title,date,time,completed) VALUES (?,?,?,?)", (
+                        ev.get('title',''), ev.get('date',''), ev.get('time','') or '', ev.get('completed',0)))
+                except Exception:
+                    pass
+            for nt in blob.get('notes', []):
+                try:
+                    tx.execute("INSERT INTO notes(title,content,folder,updated_at) VALUES (?,?,?,?) ON CONFLICT(title,folder) DO UPDATE SET content=excluded.content, updated_at=CURRENT_TIMESTAMP", (
+                        nt.get('title',''), nt.get('content',''), nt.get('folder','') or '', nt.get('updated_at','')))
+                except Exception:
+                    pass
+            for cf in blob.get('config', []):
+                try:
+                    tx.execute("INSERT OR REPLACE INTO config(key,value) VALUES (?,?)", (cf.get('key'), cf.get('value')))
+                except Exception:
+                    pass
+        return True
+    except Exception as e:
+        _log_error('backup_import', e)
+        return False
+
+def integrity_check() -> bool:
+    """Ejecuta PRAGMA integrity_check. True si OK."""
+    conn = get_conn()
+    try:
+        cur = conn.execute("PRAGMA integrity_check")
+        row = cur.fetchone()
+        return bool(row and row[0] == 'ok')
+    except Exception as e:
+        _log_error('integrity_check', e)
+        return False
+
+# ================== BÚSQUEDA FTS ==================
+
+def note_search_fts(term: str, folder: str | None = None, limit: int = 20) -> list[dict]:
+    """Busca usando FTS5 si está disponible; fallback silencioso a note_search.
+
+    Retorna lista de dicts con keys: title, folder.
+    """
+    conn = get_conn()
+    try:
+        # Verifica que la tabla virtual exista
+        cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='notes_fts'")
+        if not cur.fetchone():
+            # FTS no disponible → fallback
+            results = note_search(term, folder)
+            return [{'title': t, 'folder': f} for t, f in results]
+        match_expr = term.strip()
+        if not match_expr:
+            return []
+        if folder is not None:
+            folder = folder or ''
+            q = ("SELECT n.title, n.folder FROM notes_fts f JOIN notes n ON n.id = f.rowid "
+                 "WHERE notes_fts MATCH ? AND n.folder=? LIMIT ?")
+            cur2 = conn.execute(q, (match_expr, folder, limit))
+        else:
+            q = ("SELECT n.title, n.folder FROM notes_fts f JOIN notes n ON n.id = f.rowid "
+                 "WHERE notes_fts MATCH ? LIMIT ?")
+            cur2 = conn.execute(q, (match_expr, limit))
+        return [{'title': r[0], 'folder': r[1]} for r in cur2.fetchall()]
+    except Exception as e:
+        _log_error('note_search_fts', e)
+        try:
+            results = note_search(term, folder)
+            return [{'title': t, 'folder': f} for t, f in results]
+        except Exception:
+            return []
 
 def _migrate_legacy(conn: sqlite3.Connection) -> tuple[int,int]:
     # Migrar eventos
@@ -282,16 +504,16 @@ def config_load_all() -> dict:
 # === API Eventos ===
 
 def event_create(title: str, date: str, time: str | None) -> bool:
-    conn = get_conn()
     try:
-        time = time or ''
-        conn.execute(
-            "INSERT OR IGNORE INTO events(title,date,time,completed) VALUES (?,?,?,0)",
-            (title, date, time)
-        )
-        conn.commit()
+        with transaction() as conn:
+            time = time or ''
+            conn.execute(
+                "INSERT OR IGNORE INTO events(title,date,time,completed) VALUES (?,?,?,0)",
+                (title, date, time)
+            )
         return True
-    except Exception:
+    except Exception as e:
+        _log_error('event_create', e)
         return False
 
 def event_list_day(date: str) -> list[dict]:
@@ -310,45 +532,45 @@ def event_list_week(start_date: str, end_date: str) -> list[dict]:
     return [dict(r) for r in cur.fetchall()]
 
 def event_toggle_complete(title: str, date: str, time: str | None, completed: bool) -> bool:
-    conn = get_conn()
     try:
-        time = time or ''
-        conn.execute(
-            "UPDATE events SET completed=? WHERE title=? AND date=? AND time=?",
-            (1 if completed else 0, title, date, time)
-        )
-        conn.commit()
+        with transaction() as conn:
+            time = time or ''
+            conn.execute(
+                "UPDATE events SET completed=? WHERE title=? AND date=? AND time=?",
+                (1 if completed else 0, title, date, time)
+            )
         return True
-    except Exception:
+    except Exception as e:
+        _log_error('event_toggle_complete', e)
         return False
 
 def event_delete(title: str, date: str, time: str | None) -> int:
-    conn = get_conn()
     try:
-        time = time or ''
-        cur = conn.execute(
-            "DELETE FROM events WHERE title=? AND date=? AND time=?",
-            (title, date, time)
-        )
-        conn.commit()
-        return cur.rowcount
-    except Exception:
+        with transaction() as conn:
+            time = time or ''
+            cur = conn.execute(
+                "DELETE FROM events WHERE title=? AND date=? AND time=?",
+                (title, date, time)
+            )
+            return cur.rowcount
+    except Exception as e:
+        _log_error('event_delete', e)
         return 0
 
 # === API Notas ===
 
 def note_upsert(title: str, content: str, folder: str | None) -> bool:
-    conn = get_conn()
     try:
-        folder = folder or ''
-        conn.execute(
-            "INSERT INTO notes(title, content, folder) VALUES (?,?,?) ON CONFLICT(title, folder) "
-            "DO UPDATE SET content=excluded.content, updated_at=CURRENT_TIMESTAMP",
-            (title, content, folder)
-        )
-        conn.commit()
+        with transaction() as conn:
+            folder = folder or ''
+            conn.execute(
+                "INSERT INTO notes(title, content, folder) VALUES (?,?,?) ON CONFLICT(title, folder) "
+                "DO UPDATE SET content=excluded.content, updated_at=CURRENT_TIMESTAMP",
+                (title, content, folder)
+            )
         return True
-    except Exception:
+    except Exception as e:
+        _log_error('note_upsert', e)
         return False
 
 def note_get(title: str, folder: str | None) -> str | None:
@@ -362,14 +584,13 @@ def note_get(title: str, folder: str | None) -> str | None:
     return row[0] if row else None
 
 def note_delete(title: str, folder: str | None) -> bool:
-    conn = get_conn()
     folder = folder or ''
-    cur = conn.execute(
-        "DELETE FROM notes WHERE title=? AND folder=?",
-        (title, folder)
-    )
-    conn.commit()
-    return cur.rowcount > 0
+    with transaction() as conn:
+        cur = conn.execute(
+            "DELETE FROM notes WHERE title=? AND folder=?",
+            (title, folder)
+        )
+        return cur.rowcount > 0
 
 def note_search(term: str, folder: str | None = None) -> list[tuple[str, str | None]]:
     conn = get_conn()
