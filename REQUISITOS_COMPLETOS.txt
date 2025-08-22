@@ -1,0 +1,91 @@
+REQUISITOS COMPLETOS - ASISTENTE INTELIGENTE
+
+SECCIÓN A. Dependencias (antes en requirements.txt)
+(Instalar manualmente: pip install PyQt5 gtts playsound SpeechRecognition PyAudio duckduckgo-search googlesearch-python edge-tts pydub pytest dateparser)
+
+PyQt5>=5.15.0
+gtts>=2.2.3
+playsound>=1.3.0
+SpeechRecognition>=3.8.1
+PyAudio>=0.2.11
+duckduckgo-search>=5.3.0
+googlesearch-python>=1.2.3
+edge-tts>=6.1.9 ; opcional Windows/Edge
+pydub>=0.25.1
+pytest>=8.2.0
+dateparser>=1.2.0
+
+SECCIÓN B. Requisitos Técnicos
+- Python 3.11 (mínimo 3.8 compatible)
+- SO principal: Windows (compatible Linux/macOS con ajustes de audio)
+- SQLite local en data/app.db (autogenerado, ignorado por Git)
+
+SECCIÓN C. Servicios Opcionales
+- Google Drive API (credentials.json + token.pickle)
+- Motores TTS: gTTS (online), edge-tts (online Win)
+
+SECCIÓN D. Estructura de Datos
+Tablas:
+ events(id, title, date, time, completed)
+ notes(id, title, content, folder, updated_at)
+ config(key, value JSON)
+Índices: idx_events_date, idx_events_date_time, idx_notes_folder
+Migraciones desde resumenes/eventos.json y notas/*.txt
+Función optimize() para ANALYZE/VACUUM
+
+SECCIÓN E. Funciones Disponibles
+- Notas CRUD + búsqueda
+- Eventos diarios/semanales + completado
+- Intents: saludo, hora, eventos, notas, recordatorios (básico), tema, voz, salir, abrir apps
+- Menú de ayuda desplegable (botón ?)
+- Config persistente (tabla config)
+- TTS multi‑motor + ajuste velocidad
+
+SECCIÓN F. Setup Rápido Nueva Máquina
+1. Clonar repo
+2. Crear y activar venv
+3. Instalar dependencias (ver sección A)
+4. (Opcional) Añadir credentials.json
+5. Ejecutar: python asistente_mic.py
+
+SECCIÓN G. Comandos de Voz Ejemplo
+"crear nota <titulo>: <contenido>"
+"leer nota <titulo>"
+"eliminar nota <titulo>"
+"eventos de hoy" / "eventos de esta semana"
+"crear evento <titulo> el 25 diciembre a las 15:00"
+"recuérdame <tarea> mañana a las 9"
+"cambia a tema oscuro" / "cambia voz"
+"salir"
+
+SECCIÓN H. Roadmap Futuro
+- OCR + entidades
+- Reconocimiento voz offline/online híbrido
+- Motor proactivo sugerencias
+- Integraciones Google/Microsoft Calendar
+- Recordatorios persistentes (scheduler)
+- Dashboard web (FastAPI + React)
+- Seguridad (cifrado, roles, auditoría)
+- Docker + CI/CD cloud
+
+SECCIÓN I. Buenas Prácticas Implementadas
+- WAL + busy_timeout en SQLite
+- Context manager transacciones
+- Logging errores DB (data/db_errors.log)
+- Tests unitarios notas y eventos
+- Datos locales ignorados en .gitignore
+
+SECCIÓN J. Próximas Mejoras
+- Tests intents NLP
+- Recordatorios persistentes reales
+- Limpieza ayuda legacy
+- Validaciones entrada
+- Documentar API interna
+
+SECCIÓN K. Troubleshooting
+- Credenciales: verificar credentials.json
+- Dependencias: reinstalar (ver sección A)
+- BD corrupta: eliminar data/app.db (se regenera)
+- Sin audio: revisar dispositivo y permisos
+
+NOTA: Este archivo sustituye a requirements.txt y REQUISITOS_UNIFICADOS.txt. Para instalación automática se recomienda mantener un requirements.txt separado; si se eliminó, recrearlo copiando la lista de dependencias.
